@@ -196,8 +196,6 @@ function ONTList() {
                     <TableCell>{ont.ont_index_on_port}</TableCell>
                     <TableCell>{ont.serial_number}</TableCell>
                     <TableCell>{getStatusChip(ont.status)}</TableCell>
-                    <TableCell>{formatPower(ont.rx_power_at_ont)}</TableCell>
-                    
                     <TableCell>{formatPower(ont.tx_power_at_ont)}</TableCell>
                     <TableCell>{formatPower(ont.rx_power_at_olt)}</TableCell>
                     <TableCell>{formatDate(ont.last_down_time)}</TableCell>
