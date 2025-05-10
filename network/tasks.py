@@ -2,10 +2,10 @@ from celery import shared_task
 from django.utils import timezone
 import asyncio
 
-from .models import OLT, Card, PONPort
+from .models import OLT, Card, PONPort, ONU, ONUType
 from .utils.snmp_utils import get_system_metrics as get_snmp_system_metrics # Assuming you might have this
-from .utils.snmp_utils import get_ont_info_per_port,get_ont_info_per_slot_async # This is the synchronous wrapper
 from .utils.board_utils import get_installed_board_info # SSH based card discovery
+from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async # Import new ONT fetcher
 
 
 # logger = logging.getLogger(__name__)
@@ -221,5 +221,70 @@ def discover_and_create_pon_ports_task(card_id):
         traceback.print_exc() 
         raise # Re-raise to mark task as failed
 
+@shared_task
+def discover_and_update_onts_for_pon_port_task(pon_port_id):
+    try:
+        pon_port = PONPort.objects.select_related('card__olt').get(id=pon_port_id)
+        card = pon_port.card
+        olt = card.olt
 
+        print(f"Starting ONT discovery for OLT: {olt.name}, Card Slot: {card.slot_number}, PON Port Index: {pon_port.port_index_on_card}")
+
+        if not olt.ip_address or not olt.snmp_ro_community:
+            print(f"OLT {olt.name} is missing IP/SNMP details. Skipping ONT discovery.")
+            return
+
+        # The number of configured ONTs on the PON port is needed by the SNMP util
+        # This value should ideally be fresh from a recent PON port scan.
+        # If not, the SNMP util has a fallback.
+        num_configured_onts_on_port = pon_port.configured_onts
+
+        ont_details_snmp = asyncio.run(get_all_ont_details_for_pon_port_async(
+            ip=olt.ip_address,
+            community=olt.snmp_ro_community,
+            slot_num=card.slot_number,
+            port_num=pon_port.port_index_on_card,
+            num_configured_onts=num_configured_onts_on_port,
+            snmp_port=olt.snmp_port
+        ))
+        print(f"DEBUG TASKS: Raw SNMP data for ONTs on PON Port {pon_port_id} (count: {len(ont_details_snmp)}): {ont_details_snmp}")
+
+        updated_onts_count = 0
+        for ont_data in ont_details_snmp:
+            if not ont_data or not ont_data.get("serial_number"):
+                print(f"DEBUG TASKS: Skipping ONT data because it's invalid or missing serial number: {ont_data}")
+                continue
+
+            # Get or create a default ONUType if needed
+            default_onu_type, _ = ONUType.objects.get_or_create(
+                unique_id="UNKNOWN_DEFAULT", 
+                defaults={'name': 'Unknown Type', 'pon_type': 'GPON', 'image_url': ''}
+            )
+
+            onu_obj, created = ONU.objects.update_or_create(
+                pon_port=pon_port,
+                ont_index_on_port=ont_data.get('ont_index_on_port'),
+                defaults={
+                    'serial_number': ont_data.get('serial_number'),
+                    'status': ont_data.get('status'),
+                    'rx_power_at_ont': ont_data.get('rx_power_at_ont'),
+                    'tx_power_at_ont': ont_data.get('tx_power_at_ont'),
+                    'rx_power_at_olt': ont_data.get('rx_power_at_olt'),
+                    'last_down_time': ont_data.get('last_down_time'),
+                    'last_down_cause': ont_data.get('last_down_cause'),
+                    'onu_type': default_onu_type, # Assign a default type, can be updated later
+                    'last_snmp_update': timezone.now()
+                }
+            )
+            updated_onts_count +=1
+        
+        print(f"Successfully updated/created {updated_onts_count} ONTs for PON Port ID {pon_port_id}")
+
+    except PONPort.DoesNotExist:
+        print(f"Error in discover_and_update_onts_for_pon_port_task: PONPort with id {pon_port_id} not found.")
+    except Exception as e:
+        print(f"Error in discover_and_update_onts_for_pon_port_task for PONPort {pon_port_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     # celery -A oltmanager worker -l info -P threads

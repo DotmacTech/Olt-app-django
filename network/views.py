@@ -1,4 +1,6 @@
-from rest_framework import viewsets,status
+from rest_framework import viewsets, status, generics, mixins
+import asyncio
+from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
@@ -9,14 +11,14 @@ from .models import (
 )
 from .serializers import ( # Import the new serializers
     OLTListSerializer, OLTDetailSerializer, OLTCreateUpdateSerializer, PONPortSerializer,
-    CardSerializer,
-    UplinkPortSerializer, VLANSerializer, ONUTypeSerializer, ONUSerializer,
+        CardSerializer, PONPortSerializer, ONUSerializer, UplinkPortSerializer, VLANSerializer,ONUTypeSerializer, ONUSerializer,
     ZoneSerializer, ODBSerializer, SpeedProfileSerializer
 )
 from .utils.board_utils import get_installed_board_info # Assuming this is the correct pa
 # from .tasks import update_olt_metrics
-from .utils.snmp_utils import get_ont_info_per_port  # Use the fully async version
-from .tasks import discover_and_create_pon_ports_task # Import the Celery task
+from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async
+from .tasks import discover_and_create_pon_ports_task, discover_and_update_onts_for_pon_port_task
+
 
 
 class OLTViewSet(viewsets.ModelViewSet):
@@ -220,10 +222,48 @@ class ONUTypeViewSet(viewsets.ModelViewSet):
     queryset = ONUType.objects.all()
     serializer_class = ONUTypeSerializer
 
-class ONUViewSet(viewsets.ModelViewSet):
-    queryset = ONU.objects.all()
+class ONUViewSet(mixins.ListModelMixin,
+                 mixins.RetrieveModelMixin, # Optional: if you want a detail view for a single ONT
+                 viewsets.GenericViewSet):
+    """
+    ViewSet for listing ONTs on a specific PON port and triggering their refresh.
+    Accessed via /api/pon-ports/{pon_port_pk}/onts/
+    """
     serializer_class = ONUSerializer
+    # queryset = ONU.objects.all() # We'll override get_queryset
 
+    def get_queryset(self):
+        """
+        This view should return a list of all the ONUs
+        for the PON port as determined by the pon_port_pk portion of the URL.
+        """
+        pon_port_pk = self.kwargs.get('pon_port_pk')
+        if pon_port_pk:
+            return ONU.objects.filter(pon_port_id=pon_port_pk).select_related('onu_type', 'pon_port__card__olt').order_by('ont_index_on_port')
+        return ONU.objects.none() # Should not happen if routing is correct
+
+    @action(detail=False, methods=['post'], url_path='refresh-ont-details')
+    def refresh_ont_details(self, request, pon_port_pk=None):
+        """
+        Triggers a background task to refresh ONT details for the specified PON port.
+        """
+        try:
+            pon_port = PONPort.objects.get(pk=pon_port_pk)
+        except PONPort.DoesNotExist:
+            return Response({"error": "PON Port not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            # Trigger the Celery task
+            discover_and_update_onts_for_pon_port_task.delay(pon_port.id)
+            return Response(
+                {"message": f"ONT details refresh initiated for PON Port {pon_port.id} in the background."},
+                status=status.HTTP_202_ACCEPTED
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to initiate ONT details refresh: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 class ZoneViewSet(viewsets.ModelViewSet):
     queryset = Zone.objects.all()
     serializer_class = ZoneSerializer
@@ -235,3 +275,29 @@ class ODBViewSet(viewsets.ModelViewSet):
 class SpeedProfileViewSet(viewsets.ModelViewSet):
     queryset = SpeedProfile.objects.all()
     serializer_class = SpeedProfileSerializer
+
+from network.utils.snmp_utils import get_system_metrics
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+import asyncio
+class SystemMetricsAPIView(APIView):
+    def get(self, request):
+        from network.models import OLT
+        olt_id = request.query_params.get('olt_id')
+        board = request.query_params.get('board')
+        if not olt_id:
+            return Response({'error': 'olt_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            olt = OLT.objects.get(id=olt_id)
+        except OLT.DoesNotExist:
+            return Response({'error': 'OLT not found'}, status=status.HTTP_404_NOT_FOUND)
+        host = olt.ip_address
+        ssh_username = olt.telnet_username
+        ssh_password = olt.telnet_password
+        try:
+            metrics = get_system_metrics(host, ssh_username, ssh_password, board)
+            print("[API DEBUG] metrics to return:", metrics)
+            return Response(metrics)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

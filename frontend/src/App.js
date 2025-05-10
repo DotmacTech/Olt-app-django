@@ -15,13 +15,14 @@ import RemoteACLs from './pages/RemoteACLs';
 import VoIPProfiles from './pages/VoIPProfiles';
 import Advanced from './pages/Advanced';
 import AddOLT from './pages/AddOLT';
-import PONPort from './pages/PONPort'; // Import PONPort
+import PONPort from './pages/PONPort'; 
+import ONTList from './pages/ONTList'; // Import the new ONTList page
 
 const theme = createTheme({
   palette: {
     mode: 'light',
     primary: {
-      main: '#1976d2',
+      main: '#006400', // Dark Green
     },
     secondary: {
       main: '#dc004e',
@@ -53,7 +54,9 @@ function App() {
             
             <Route path="/olt/add" element={<AddOLT />} />
             {/* Route for specific PON Port details page */}
-            <Route path="/olts/:oltId/slot/:slotNumber/ponports" element={<PONPort />} />
+            <Route path="/olts/:oltId/slot/:slotNumber/ponports" element={<PONPort />} /> 
+            {/* Route for listing ONTs on a specific PON Port */}
+            <Route path="/olts/:oltId/slot/:slotNumber/ponport/:ponPortId/onts" element={<ONTList />} />
           </Routes>
         </Layout>
       </Router>

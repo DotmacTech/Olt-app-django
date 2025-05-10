@@ -96,9 +96,16 @@ class ONUTypeSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class ONUSerializer(serializers.ModelSerializer):
+    onu_type_name = serializers.CharField(source='onu_type.name', read_only=True)
+
     class Meta:
         model = ONU
-        fields = '__all__'
+        fields = [
+            'id', 'pon_port', 'serial_number', 'ont_index_on_port', 'status',
+            'rx_power_at_ont', 'tx_power_at_ont', 'rx_power_at_olt',
+            'onu_type', 'onu_type_name', 'last_down_time', 'last_down_cause',
+            'last_snmp_update', 'created_at'
+        ]
 
 class ZoneSerializer(serializers.ModelSerializer):
     class Meta:

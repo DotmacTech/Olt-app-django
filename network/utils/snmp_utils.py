@@ -39,12 +39,16 @@ HUAWEI_OLT_PORT_LAST_DOWN_TIME_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.21.1.18'
 HUAWEI_OLT_PORT_LAST_DOWN_CAUSE_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.21.1.19'
 
 # Huawei ONT Specific OIDs
+HUAWEI_ONT_SERIAL_NUMBER_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.43.1.3' # hwGponDeviceOntSn (Hex String)
 HUAWEI_ONT_ACTIVE_STATUS_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15' # hwGponDeviceOntOnlineState
 HUAWEI_ONT_TX_POWER_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.3'
 HUAWEI_ONT_RX_POWER_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4'
 HUAWEI_ONT_VOLTAGE_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.5'
 HUAWEI_ONT_OLT_RX_OPTICAL_POWER_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.6' # hwGponDeviceOntOpticalPowerReceivedFromOlt
 HUAWEI_ONT_TEMPERATURE_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.1'
+HUAWEI_ONT_LAST_DOWN_TIME_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.10' # hwGponDeviceOntLastDownTime (DateAndTime)
+HUAWEI_ONT_LAST_DOWN_CAUSE_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.11' # hwGponDeviceOntLastDownCause (Integer)
+
 
 import os
 
@@ -145,12 +149,22 @@ async def get_snmp_data(host, community, oid, slot_num, port_num, onu_id=None, s
             return None # NoSunchName, NoSunchInstance will fall here
         else:
             if varBinds and varBinds[0]:
-                value = varBinds[0][1] # ObjectSyntax instance
-                if value.isSameTypeWith(Null()): # Check for NoSunchInstance or EndOfMibView
+                oid_returned, value_returned = varBinds[0] # oid_returned is ObjectIdentity, value_returned is ObjectSyntax
+                
+                if value_returned.isSameTypeWith(Null()): # Check for NoSunchInstance or EndOfMibView
                     return None
-                # Return the raw string representation as in the original function's successful case
+                # For DateAndTime, return the ObjectSyntax instance itself for further parsing
+                if oid == HUAWEI_ONT_LAST_DOWN_TIME_OID: # Compare with the base OID passed in
+                    return value_returned 
+                # For others, return the raw string representation
                 return str(" = ".join([x.prettyPrint() for x in varBinds[0]]))
             return None # No varBinds returned
+    except ConnectionRefusedError:
+        # print(f"SNMP connection refused for {host}:{snmp_port} OID {oid_with_index}")
+        return None
+        # Return the raw string representation as in the original function's successful case
+        return str(" = ".join([x.prettyPrint() for x in varBinds[0]]))
+        return None # No varBinds returned
     except ConnectionRefusedError:
         # print(f"SNMP connection refused for {host}:{snmp_port} OID {oid_with_index}")
         return None
@@ -443,7 +457,7 @@ async def _fetch_one_port_details_async(ip, community, slot_num, port_id, snmp_p
         # Fetch status for each potentially configured ONT. Huawei might allow up to 128.
         # We limit to number_of_olt or a practical max like 128.
         # The OID for ONT status often includes the ONT index (0-127).
-        for ont_idx in range(min(number_of_olt, 128)): # Iterate up to actual ONT count or 128
+        for ont_idx in range(min(number_of_olt+1, 128)): # Iterate up to actual ONT count or 128
             ont_status_tasks.append(
                 get_snmp_data(ip, community, HUAWEI_ONT_ACTIVE_STATUS_OID, slot_num, port_id, ont_idx, snmp_port=snmp_port)
             )
@@ -459,6 +473,7 @@ async def _fetch_one_port_details_async(ip, community, slot_num, port_id, snmp_p
                         ont_status_val = int(ont_status_val_str)
                         if ont_status_val == 1: # Assuming 1 means online
                             online_onts += 1
+                        
                 except (ValueError, TypeError, AttributeError, IndexError):
                     continue # Ignore parsing errors for individual ONT status
     
@@ -501,6 +516,182 @@ async def get_ont_info_per_slot_async(ip, community, slot_num, number_of_ports, 
             print(f"Error fetching details for a port in slot {slot_num}: {data}")
             # Optionally add a placeholder or skip
         elif data: # Ensure data is not None or empty
+            results.append(data)
+    return results
+
+def parse_snmp_date_and_time(octet_string_val):
+    """
+    Parses an SNMP DateAndTime octet string into a datetime object.
+    DateAndTime is an OCTET STRING, typically 8 or 11 bytes.
+    Format: YYYY-MM-DD,HH:MM:SS.S[+/-HH:MM]
+    Octets:
+      1-2: Year (big-endian)
+      3:   Month
+      4:   Day
+      5:   Hour
+      6:   Minute
+      7:   Second
+      8:   Deci-seconds
+      (Optional, if 11 bytes)
+      9:   Direction from UTC ('+' or '-')
+      10:  Hours from UTC
+      11:  Minutes from UTC
+    Returns a datetime object (naive, UTC if no offset) or None.
+    """
+    if not octet_string_val or not hasattr(octet_string_val, 'asOctets'):
+        return None
+    
+    octets = octet_string_val.asOctets()
+    length = len(octets)
+
+    if length not in (8, 11):
+        # print(f"Invalid DateAndTime length: {length}, octets: {octets.hex()}")
+        return None
+
+    try:
+        year = (octets[0] << 8) + octets[1]
+        month = octets[2]
+        day = octets[3]
+        hour = octets[4]
+        minute = octets[5]
+        second = octets[6]
+        # deci_seconds = octets[7] # We'll ignore deci-seconds for simplicity
+
+        dt = datetime.datetime(year, month, day, hour, minute, second)
+
+        if length == 11:
+            direction = chr(octets[8])
+            offset_hours = octets[9]
+            offset_minutes = octets[10]
+            
+            offset_delta = datetime.timedelta(hours=offset_hours, minutes=offset_minutes)
+            if direction == '-':
+                dt += offset_delta # If it's -UTC, add to get to UTC
+            elif direction == '+':
+                dt -= offset_delta # If it's +UTC, subtract to get to UTC
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt
+    except ValueError as e:
+        # print(f"Error parsing DateAndTime '{octets.hex()}': {e}")
+        return None
+    except Exception as e:
+        # print(f"Generic error parsing DateAndTime '{octets.hex()}': {e}")
+        return None
+
+async def _fetch_one_ont_details_async(ip, community, slot_num, port_num, ont_idx, snmp_port=161):
+    """Helper to fetch all details for a single ONT asynchronously."""
+    sn_task = get_snmp_data(ip, community, HUAWEI_ONT_SERIAL_NUMBER_OID, slot_num, port_num, ont_idx, snmp_port=snmp_port)
+    status_task = get_snmp_data(ip, community, HUAWEI_ONT_ACTIVE_STATUS_OID, slot_num, port_num, ont_idx, snmp_port=snmp_port)
+    rx_at_ont_task = get_snmp_data(ip, community, HUAWEI_ONT_RX_POWER_OID, slot_num, port_num, ont_idx, snmp_port=snmp_port)
+    tx_at_ont_task = get_snmp_data(ip, community, HUAWEI_ONT_TX_POWER_OID, slot_num, port_num, ont_idx, snmp_port=snmp_port)
+    rx_at_olt_task = get_snmp_data(ip, community, HUAWEI_ONT_OLT_RX_OPTICAL_POWER_OID, slot_num, port_num, ont_idx, snmp_port=snmp_port)
+    last_down_time_task = get_snmp_data(ip, community, HUAWEI_ONT_LAST_DOWN_TIME_OID, slot_num, port_num, ont_idx, snmp_port=snmp_port) # This will return ObjectSyntax
+    last_down_cause_task = get_snmp_data(ip, community, HUAWEI_ONT_LAST_DOWN_CAUSE_OID, slot_num, port_num, ont_idx, snmp_port=snmp_port)
+
+    sn_raw, status_raw, rx_ont_raw, tx_ont_raw, rx_olt_raw, ldt_obj_syntax, ldc_raw = await asyncio.gather(
+        sn_task, status_task, rx_at_ont_task, tx_at_ont_task, rx_at_olt_task, last_down_time_task, last_down_cause_task,
+        return_exceptions=True # Allow individual tasks to fail
+    )
+
+    print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: SN_RAW='{sn_raw}', STATUS_RAW='{status_raw}'")
+
+    # Helper to parse raw SNMP string "OID = TYPE: Value"
+    def parse_val(raw, data_type_converter=str):
+        if isinstance(raw, Exception) or not raw:
+            return None
+        try:
+            # Example raw strings:
+            # "SNMPv2-SMI::enterprises.2011.6.128.1.1.2.43.1.3.4194320384.0 = Hex-STRING: 485754437d4630c3"
+            # "SNMPv2-SMI::enterprises.2011.6.128.1.1.2.46.1.15.4194320384.0 = INTEGER: 2"
+            # "SNMPv2-SMI::enterprises.2011.6.128.1.1.2.43.1.3.4194320384.2 = No Such Instance currently exists at this OID"
+            
+            if "No Such Instance" in raw or "No Such Object" in raw:
+                return None
+            
+            # Split by " = " to separate OID from TYPE: Value
+            parts = raw.split(" = ", 1)
+            if len(parts) < 2: # Should not happen if format is consistent
+                return None 
+            
+            type_and_value_part = parts[1]
+            
+            # Split by ": " to separate TYPE from Value (use maxsplit=1)
+            val_str = type_and_value_part.split(": ", 1)[-1].strip()
+
+            return data_type_converter(val_str)
+        except: return None
+
+    serial_number_hex = parse_val(sn_raw) # e.g., "48575443EA7508A0"
+    print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: serial_number_hex='{serial_number_hex}'")
+    
+    # For Hex-STRING, the value might be prefixed with "0x" by some SNMP libraries/devices, or not.
+    # bytes.fromhex() does not want "0x".
+    processed_hex_for_sn = None
+    if serial_number_hex:
+        if serial_number_hex.lower().startswith("0x"):
+            processed_hex_for_sn = serial_number_hex[2:]
+        else:
+            processed_hex_for_sn = serial_number_hex
+            
+    serial_number = bytes.fromhex(processed_hex_for_sn).decode('ascii', errors='replace') if processed_hex_for_sn else None
+    print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: final_serial_number='{serial_number}'")
+
+    ont_status_map = {"1": "online", "2": "offline"} # Example mapping
+    status_code = parse_val(status_raw, int)
+    status = ont_status_map.get(str(status_code), "unknown") if status_code is not None else "unknown"
+
+    # Power values are typically in 0.01 dBm, convert to dBm
+    rx_power_at_ont = parse_val(rx_ont_raw, lambda x: float(x) * 0.01 if x.replace('.', '', 1).isdigit() else None)
+    tx_power_at_ont = parse_val(tx_ont_raw, lambda x: float(x) * 0.01 if x.replace('.', '', 1).isdigit() else None)
+    rx_power_at_olt = parse_val(rx_olt_raw, lambda x: float(x) * 0.01 if x.replace('.', '', 1).isdigit() else None)
+
+    last_down_time = parse_snmp_date_and_time(ldt_obj_syntax) if not isinstance(ldt_obj_syntax, Exception) else None # ldt_obj_syntax is the ObjectSyntax itself
+    
+    # Last down cause mapping (example, needs to be verified for Huawei)
+    # 1: dying-gasp, 2: losi, 3: lofi, 4: sfi, 5: loai, 6: loami, etc.
+    last_down_cause_code = parse_val(ldc_raw, int)
+    last_down_cause_map = {1: "dying-gasp", 2: "loss-of-signal", 3: "loss-of-frame", 4: "signal-fail"} # Add more as known
+    last_down_cause = last_down_cause_map.get(last_down_cause_code, str(last_down_cause_code) if last_down_cause_code is not None else "unknown")
+
+    if not serial_number: # If no serial number, this ONT entry is likely not valid/configured
+        print(f"DEBUG SNMP UTIL _fetch_one_ont: No serial number found for OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx}, returning None.")
+        return None
+
+    return {
+        "serial_number": serial_number,
+        "ont_index_on_port": ont_idx,
+        "status": status,
+        "rx_power_at_ont": rx_power_at_ont,
+        "tx_power_at_ont": tx_power_at_ont,
+        "rx_power_at_olt": rx_power_at_olt,
+        "last_down_time": last_down_time,
+        "last_down_cause": last_down_cause,
+    }
+
+async def get_all_ont_details_for_pon_port_async(ip, community, slot_num, port_num, num_configured_onts, snmp_port=161):
+    """Fetches details for all configured ONTs on a specific PON port."""
+    ont_detail_tasks = []
+    # Huawei typically supports up to 128 ONTs per port (index 0-127)
+    # We iterate up to the number of configured ONTs reported by the OLT for that port,
+    # or a practical limit like 128 if num_configured_onts is unexpectedly high or zero.
+    # If num_configured_onts is 0, we might still try to discover a few to see if any respond.
+    limit = min(max(num_configured_onts, 32), 128) # Try at least 32, max 128, or num_configured
+    if num_configured_onts == 0: # If OLT reports 0, maybe it's an error, try a few.
+        limit = 32 
+
+    for ont_idx in range(limit):
+        ont_detail_tasks.append(
+            _fetch_one_ont_details_async(ip, community, slot_num, port_num, ont_idx, snmp_port)
+        )
+    
+    all_onts_data_raw = await asyncio.gather(*ont_detail_tasks, return_exceptions=True)
+    
+    results = []
+    for data in all_onts_data_raw:
+        if isinstance(data, Exception):
+            # print(f"Error fetching details for an ONT on {slot_num}/{port_num}: {data}")
+            continue
+        if data and data.get("serial_number"): # Ensure it's a valid ONT record
             results.append(data)
     return results
 

@@ -4,14 +4,14 @@ import { Link, useLocation } from 'react-router-dom';
 
 const navItems = [
   { label: 'OLT Details', path: '/' },
-  { label: 'OLT Cards', path: '/cards' },
-  { label: 'PON Ports', path: '/pon-ports' },
-  { label: 'Uplink', path: '/uplink' },
-  { label: 'VLANs', path: '/vlans' },
-  { label: 'ONU Mgmt Ps', path: '/onu-management' },
-  { label: 'Remote ACLs', path: '/remote-acls' },
-  { label: 'VoIP Profiles', path: '/voip-profiles' },
-  { label: 'Advanced', path: '/advanced' }
+  // { label: 'OLT Cards', path: '/cards' },
+  // { label: 'PON Ports', path: '/pon-ports' },
+  // { label: 'Uplink', path: '/uplink' },
+  // { label: 'VLANs', path: '/vlans' },
+  // { label: 'ONU Mgmt Ps', path: '/onu-management' },
+  // { label: 'Remote ACLs', path: '/remote-acls' },
+  // { label: 'VoIP Profiles', path: '/voip-profiles' },
+  // { label: 'Advanced', path: '/advanced' }
 ];
 
 function Layout({ children }) {
@@ -22,7 +22,7 @@ function Layout({ children }) {
       <AppBar position="static" color="primary">
         <Toolbar>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            SMART OLT
+          Dotmac Network Management
           </Typography>
           <Button color="inherit">User Training</Button>
           <Button color="inherit">Configure</Button>

@@ -18,6 +18,7 @@ venv.bak/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+network/migrations
 
 # Media & Static files (collected by Django)
 /media/

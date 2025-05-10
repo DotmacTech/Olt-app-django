@@ -157,14 +157,27 @@ class ONUType(models.Model):
 class ONU(models.Model):
     pon_port = models.ForeignKey(PONPort, on_delete=models.CASCADE, related_name='onus')
     serial_number = models.CharField(max_length=100, unique=True)
-    status = models.CharField(max_length=50)
-    signal_strength = models.FloatField()
+    ont_index_on_port = models.IntegerField(help_text="Index of the ONT on the PON port, e.g., 0-127")
+    status = models.CharField(max_length=50, blank=True, null=True, help_text="e.g., online, offline, los") # Raw status from SNMP
+    # Signal strength at the ONT (received from OLT)
+    rx_power_at_ont = models.FloatField(null=True, blank=True, help_text="ONT Receive Power from OLT (dBm)")
+    # Signal strength transmitted by the ONT
+    tx_power_at_ont = models.FloatField(null=True, blank=True, help_text="ONT Transmit Power (dBm)")
+    # Signal strength from ONT as received by OLT
+    rx_power_at_olt = models.FloatField(null=True, blank=True, help_text="OLT Receive Power from ONT (dBm)")
+    
     onu_type = models.ForeignKey(ONUType, on_delete=models.CASCADE, related_name='onus')
+    
+    last_down_time = models.DateTimeField(null=True, blank=True)
+    last_down_cause = models.CharField(max_length=100, blank=True, null=True)
+    
+    last_snmp_update = models.DateTimeField(null=True, blank=True, help_text="Timestamp of the last successful SNMP data fetch for this ONU")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.serial_number} ({self.onu_type.name})"
-
+    class Meta:
+        unique_together = ('pon_port', 'ont_index_on_port') # An ONT index is unique per PON port
 class Zone(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField()

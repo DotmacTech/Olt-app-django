@@ -182,3 +182,25 @@ export const triggerPonPortRefresh = async (oltId, slotNumber) => {
     throw error;
   }
 }
+
+// Fetch ONTs for a specific PON Port
+export const getOntsForPonPort = async (ponPortId) => {
+  try {
+    const response = await api.get(`/pon-ports/${ponPortId}/onts/`);
+    return response.data;
+  } catch (error) {
+    console.error(`Error fetching ONTs for PON Port ${ponPortId}:`, error.response || error.message);
+    throw error;
+  }
+};
+
+// Trigger ONT details refresh for a specific PON Port
+export const triggerOntsRefresh = async (ponPortId) => {
+  try {
+    const response = await api.post(`/pon-ports/${ponPortId}/onts/refresh-ont-details/`);
+    return response.data; // Should contain a message like "Refresh initiated..."
+  } catch (error) {
+    console.error(`Error triggering ONT refresh for PON Port ${ponPortId}:`, error.response || error.message);
+    throw error;
+  }
+};

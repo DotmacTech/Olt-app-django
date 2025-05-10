@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useParams, Link as RouterLink } from 'react-router-dom';
+import { useParams, Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, CircularProgress, Alert,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton,
   Breadcrumbs, Link, Chip, Button, Snackbar
 } from '@mui/material';
-import { Home as HomeIcon, Cable as CableIcon, SettingsInputSvideo as SlotIcon, Refresh as RefreshIcon } from '@mui/icons-material';
-import { getPonPortDetailsForSlot, triggerPonPortRefresh } from '../services/api';
+import { Home as HomeIcon, Cable as CableIcon, SettingsInputSvideo as SlotIcon, Refresh as RefreshIcon, Router as RouterIcon, ArrowBack as ArrowBackIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
+import { getPonPortDetailsForSlot, triggerPonPortRefresh, getOLTDetails } from '../services/api';
+
 
 
 function PONPort() {
@@ -17,6 +18,8 @@ function PONPort() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
+  const [oltName, setOltName] = useState('');
+  const navigate = useNavigate();
 
 
   const showNotification = (message, severity = 'info') => {
@@ -29,6 +32,15 @@ function PONPort() {
     }
     setNotification({ ...notification, open: false });
   };
+
+  const fetchOltName = useCallback(async () => {
+    try {
+      const oltDetails = await getOLTDetails(oltId);
+      setOltName(oltDetails.name || `OLT ${oltId}`);
+    } catch (err) {
+      console.error("Error fetching OLT name for breadcrumbs:", err);
+    }
+  }, [oltId]);
 
   const fetchData = useCallback(async (isManualRefresh = false) => {
     if (!oltId || slotNumber === undefined) {
@@ -66,16 +78,9 @@ function PONPort() {
   }, [oltId, slotNumber]); // Removed lastUpdated from dependencies here
 
   useEffect(() => {
-    const now = new Date();
-    // If lastUpdated is null (first load) or more than 5 mins ago, fetch.
-    // The backend now handles its own staleness, so this client cache is mostly for very quick re-visits.
-    if (!lastUpdated || (now - lastUpdated) > (60 * 1000)) {
-      fetchData();
-    } else {
-      console.log("Skipping PON port details refresh (client cache) - less than 1 minutes since last update.");
-      setLoading(false); // Ensure loading is false if we use cached data
-    }
-  }, [oltId, slotNumber, fetchData, lastUpdated]); // Add lastUpdated here to re-evaluate if it changes
+    fetchOltName();
+    fetchData(); // Fetch data on initial load or when oltId/slotNumber changes
+  }, [oltId, slotNumber, fetchData, fetchOltName]); // Corrected dependency array
 
   const handleRefresh = async () => {
     if (!oltId || slotNumber === undefined) return;
@@ -108,21 +113,28 @@ function PONPort() {
 
   return (
     <Box>
-      <Breadcrumbs aria-label="breadcrumb" sx={{ mb: 2 }}>
-        <Link component={RouterLink} to="/olts" underline="hover" color="inherit" sx={{ display: 'flex', alignItems: 'center' }}>
-          <HomeIcon sx={{ mr: 0.5 }} fontSize="inherit" /> OLTs
-        </Link>
-        <Link component={RouterLink} to={`/olts/${oltId}/cards`} underline="hover" color="inherit" sx={{ display: 'flex', alignItems: 'center' }}>
-          <SlotIcon sx={{ mr: 0.5 }} fontSize="inherit" /> OLT Cards (ID: {oltId})
-        </Link>
-        <Typography color="text.primary" sx={{ display: 'flex', alignItems: 'center' }}>
-          <CableIcon sx={{ mr: 0.5 }} fontSize="inherit" />
-          PON Ports (Slot: {slotNumber})
-        </Typography>
-      </Breadcrumbs>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+        <IconButton onClick={() => navigate(`/olt/${oltId}/cards`)} sx={{ mr: 1 }}> {/* Navigate back to cards page */}
+          <ArrowBackIcon />
+        </IconButton>
+        <Breadcrumbs aria-label="breadcrumb">
+          <Link component={RouterLink} to="/olt-list" sx={{ display: 'flex', alignItems: 'center' }} color="inherit">
+            <HomeIcon sx={{ mr: 0.5 }} fontSize="inherit" /> OLT List
+          </Link>
+          <Link component={RouterLink} to={`/olt/${oltId}`} sx={{ display: 'flex', alignItems: 'center' }} color="inherit">
+            <RouterIcon sx={{ mr: 0.5 }} fontSize="inherit" /> {oltName || `OLT ${oltId}`}
+          </Link>
+          <Link component={RouterLink} to={`/olt/${oltId}/cards`} sx={{ display: 'flex', alignItems: 'center' }} color="inherit">
+            <SlotIcon sx={{ mr: 0.5 }} fontSize="inherit" /> Slot {slotNumber} Cards
+          </Link>
+          <Typography color="text.primary" sx={{ display: 'flex', alignItems: 'center' }}>
+            <CableIcon sx={{ mr: 0.5 }} fontSize="inherit" /> PON Ports
+          </Typography>
+        </Breadcrumbs>
+      </Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5">
-          PON Port Details - OLT ID: {oltId}, Slot: {slotNumber}
+        PON Ports - OLT: {oltName || oltId}, Slot: {slotNumber}
           {lastUpdated && !loading && ( <Typography variant="caption" sx={{ ml: 2 }}>Client Last Fetched: {lastUpdated.toLocaleTimeString()}</Typography> )}
         </Typography>
         <Button
@@ -155,6 +167,8 @@ function PONPort() {
                   <TableCell>Online ONTs</TableCell>
                   <TableCell>TX Power (dBm)</TableCell>
                   <TableCell>RX Power (dBm)</TableCell>
+                  <TableCell>Last Update</TableCell>
+                  <TableCell align="center">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -163,10 +177,30 @@ function PONPort() {
                     <TableCell>{port.port_index_on_card}</TableCell>
                     <TableCell>{port.description}</TableCell>
                     <TableCell>{getStatusChip(port.status)}</TableCell>
-                    <TableCell>{port.configured_onts}</TableCell>
+                    <TableCell>
+                      <Link
+                        component={RouterLink}
+                        to={`/olts/${oltId}/slot/${slotNumber}/ponport/${port.id}/onts`}
+                        sx={{ cursor: 'pointer', textDecoration: port.configured_onts > 0 ? 'underline' : 'none', color: port.configured_onts > 0 ? 'primary.main' : 'text.secondary' }}
+                        onClick={(e) => { if (port.configured_onts === 0) e.preventDefault(); }} // Prevent navigation if 0
+                      >
+                        {port.configured_onts}
+                      </Link>
+                    </TableCell>
                     <TableCell>{port.online_onts}</TableCell>
                     <TableCell>{port.tx_power !== null && port.tx_power !== undefined ? port.tx_power.toFixed(2) : 'N/A'}</TableCell>
                     <TableCell>{port.rx_power !== null && port.rx_power !== undefined ? port.rx_power.toFixed(2) : 'N/A'}</TableCell>
+                    <TableCell>{port.last_snmp_update ? new Date(port.last_snmp_update).toLocaleString() : 'N/A'}</TableCell>
+                    <TableCell align="center">
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={() => navigate(`/olts/${oltId}/slot/${slotNumber}/ponport/${port.id}/onts`)}
+                        startIcon={<VisibilityIcon />}
+                      >
+                        View ONTs
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -183,17 +217,19 @@ function PONPort() {
         >
           <div>{notification.message || "Test Message"}</div>
         </Snackbar>
-      {/* <Snackbar
-        open={notification.open}
-        autoHideDuration={6000}
-        onClose={handleCloseNotification}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        {/* Ensure Alert is always rendered if Snackbar is open, even if message is briefly empty */}
-        {/* <Alert onClose={handleCloseNotification} severity={notification.severity} sx={{ width: '100%' }}>
-          {notification.message}
-        </Alert> 
-+      </Snackbar> */}
+      {/* 
+        // This is the properly commented out section
+        <Snackbar
+          open={notification.open}
+          autoHideDuration={6000}
+          onClose={handleCloseNotification}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert onClose={handleCloseNotification} severity={notification.severity} sx={{ width: '100%' }}>
+            {notification.message}
+          </Alert> 
+        </Snackbar> 
+      */}
     </Box>
   );
 }
