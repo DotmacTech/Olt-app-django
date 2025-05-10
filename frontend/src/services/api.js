@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://127.0.0.1:8000/api' || 'http://10.120.120.38:8000/api'
-
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+console.log(process.env.REACT_APP_API_BASE_URL)
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -39,8 +39,10 @@ export const getOLTCards = async (oltId) => {
 
 // OLT
 export const getOLTs = async () => {
+  
   try {
     const response = await api.get('/olts/');
+    console.log(API_BASE_URL)
     return response.data;
   } catch (error) {
     console.error('Error fetching OLTs:', error);
