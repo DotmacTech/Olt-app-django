@@ -184,7 +184,6 @@ function ONTList() {
                   <TableCell>Status</TableCell>
                   <TableCell>Rx Power (ONT)</TableCell>
                   <TableCell>Tx Power (ONT)</TableCell>
-                  <TableCell>Rx Power (OLT)</TableCell>
                   <TableCell>Last Down Time</TableCell>
                   <TableCell>Last Down Cause</TableCell>
                   <TableCell>Last Update</TableCell>
