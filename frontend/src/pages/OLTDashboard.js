@@ -4,7 +4,7 @@ import {
   Box,
   Tabs,
   Tab,
-  IconButton,
+  IconButton, // Keep IconButton if used elsewhere, or remove if not
   Typography,
   Paper,
   Breadcrumbs,
@@ -23,7 +23,7 @@ import {
   Settings as SettingsIcon,
 } from '@mui/icons-material';
 import { getOLTDetails } from '../services/api';
-
+import { useCallback } from 'react'; // Import useCallback
 function OLTDashboard() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -32,8 +32,9 @@ function OLTDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    const fetchOLTDetails = async () => {
+  const fetchOLTData = useCallback(async () => {
+    // Renamed to fetchOLTData to avoid confusion if passed directly
+    if (!id) return;
       try {
         setLoading(true);
         const data = await getOLTDetails(id);
@@ -45,12 +46,13 @@ function OLTDashboard() {
       } finally {
         setLoading(false);
       }
-    };
+  }, [id]); // id is a dependency for useCallback
 
+  useEffect(() => {
     if (id) {
-      fetchOLTDetails();
+      fetchOLTData();
     }
-  }, [id]);
+  }, [id, fetchOLTData]); // fetchOLTData is now stable due to useCallback
 
   const tabs = [
     { label: 'Overview', path: '', icon: <DashboardIcon /> },
@@ -130,7 +132,7 @@ function OLTDashboard() {
 
       {/* Content */}
       <Paper sx={{ p: 3, minHeight: 'calc(100vh - 250px)' }}>
-        <Outlet context={{ oltData, loading, error }} />
+    <Outlet context={{ oltData, loading, error, refreshOltData: fetchOLTData }} />
       </Paper>
     </Box>
   );

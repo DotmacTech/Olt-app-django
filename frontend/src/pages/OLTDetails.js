@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -12,6 +12,8 @@ import {
   Card,
   CardContent,
   IconButton,
+  Button,
+  Snackbar,
 } from '@mui/material';
 import SignalCellularAltIcon from '@mui/icons-material/SignalCellularAlt';
 import StraightenIcon from '@mui/icons-material/Straighten';
@@ -29,65 +31,49 @@ import {
   ArrowBack as ArrowBackIcon,
   SwapHoriz as SwapHorizIcon,
   SettingsEthernet as SettingsEthernetIcon,
+  Refresh as RefreshIcon,
 } from '@mui/icons-material';
-import { getOLTDetails, getSystemMetrics } from '../services/api';
+import { triggerOLTMetricsRefresh } from '../services/api'; // We'll use this for refresh
 
 function OLTDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [oltData, setOltData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [metrics, setMetrics] = useState({});
-  const [metricsLoading, setMetricsLoading] = useState(false);
-  const [metricsError, setMetricsError] = useState(null);
+  // Use data and refresh function from OLTDashboard context
+  const { oltData, loading: initialLoading, error: initialError, refreshOltData } = useOutletContext();
+  const [isRefreshingMetrics, setIsRefreshingMetrics] = useState(false);
+  const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const data = await getOLTDetails(id);
-        setOltData(data);
-        console.log('OLT Details API response:', data);
-        setError(null);
-      } catch (err) {
-        setError('Failed to fetch OLT details: ' + (err.response?.data?.detail || err.message));
-        console.error('Error:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (id) {
-      fetchData();
+  // Helper to format values, can be expanded
+  const formatValue = (value, unit = '') => {
+    if (value === null || value === undefined || value === '') {
+      return 'N/A';
     }
-  }, [id]);
+    return `${value}${unit}`;
+  };
 
-  useEffect(() => {
-    const fetchMetrics = async () => {
-      if (!oltData || !oltData.id) return;
-      setMetricsLoading(true);
-      setMetricsError(null);
-      try {
-        const data = await getSystemMetrics(oltData.id);
-        console.log('System Metrics API response:', data);
-        setMetrics({
-          uptime: data.uptime,
-          temperature: data.temperature,
-          cpu: data.cpu,
-          memory: data.memory,
-          total_cards: data.total_cards
-        });
-      } catch (err) {
-        console.error('System Metrics API error:', err);
-        setMetricsError('Failed to fetch system metrics');
-        setMetrics({ uptime: null, temperature: null });
-      } finally {
-        setMetricsLoading(false);
+  const handleRefreshMetrics = async () => {
+    if (!id) return;
+    setIsRefreshingMetrics(true);
+    setNotification({ open: false, message: '', severity: 'info' }); // Clear previous
+    try {
+      await triggerOLTMetricsRefresh(id);
+      setNotification({ open: true, message: 'Metrics refresh initiated. Please wait a moment for data to update.', severity: 'info' });
+      // Wait for backend to process (adjust delay as needed)
+      // A longer delay might be needed if SSH connection + commands are slow
+      await new Promise(resolve => setTimeout(resolve, 10000)); // 10 seconds delay
+      
+      if (refreshOltData) {
+        await refreshOltData(); // Call the refresh function from OLTDashboard context
       }
-    };
-    fetchMetrics();
-  }, [oltData]);
+      // Check oltData again after refresh, though notification might be optimistic
+      setNotification({ open: true, message: 'Metrics refresh process completed. Data should be updated.', severity: 'success' });
+    } catch (err) {
+      console.error("Failed to trigger OLT metrics refresh:", err);
+      setNotification({ open: true, message: `Failed to refresh metrics: ${err.response?.data?.message || err.message}`, severity: 'error' });
+    } finally {
+      setIsRefreshingMetrics(false);
+    }
+  };
 
   const getStatusColor = (status) => {
     const colors = {
@@ -119,22 +105,21 @@ function OLTDetails() {
     }
   };
 
-  if (loading) {
+  if (initialLoading && !oltData) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
         <CircularProgress />
       </Box>
     );
   }
-
-  if (error) {
+  
+  if (initialError && !oltData) {
     return (
       <Alert severity="error" sx={{ mb: 2 }}>
-        {error}
+        {initialError}
       </Alert>
     );
   }
-
   // Add this check: If not loading and no error, but oltData is still null/undefined,
   // it means the fetch might have completed without valid data yet.
   if (!oltData) {
@@ -145,13 +130,21 @@ function OLTDetails() {
 
   return (
     <Box>
-      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <IconButton onClick={() => navigate('/')} sx={{ mr: 1 }}>
-            <ArrowBackIcon />
-          </IconButton>
-          <Typography variant="h5">OLT Details</Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          {/* Removed back button as it's part of OLTDashboard layout */}
+          <Typography variant="h5">OLT Overview</Typography>
         </Box>
+        <Button
+          variant="contained"
+          startIcon={<RefreshIcon />}
+          onClick={handleRefreshMetrics}
+          disabled={isRefreshingMetrics || initialLoading}
+        >
+          {isRefreshingMetrics ? 'Refreshing...' : 'Refresh Metrics'}
+        </Button>
+      </Box>
+      <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
         <Chip
           label={oltData.status?.toUpperCase() || 'UNKNOWN'} // Use optional chaining and provide a default
           color={getStatusColor(oltData.status || 'unknown')} // Use default for color lookup too
@@ -167,19 +160,19 @@ function OLTDetails() {
               <Typography variant="h6" gutterBottom>Basic Information</Typography>
               <Grid container spacing={2}>
                 <Grid item xs={4}><Typography color="text.secondary">Name</Typography></Grid>
-                <Grid item xs={8}><Typography>{oltData.name}</Typography></Grid>
+                <Grid item xs={8}><Typography>{formatValue(oltData.name)}</Typography></Grid>
                 
                 <Grid item xs={4}><Typography color="text.secondary">IP Address</Typography></Grid>
-                <Grid item xs={8}><Typography>{oltData.ip_address}</Typography></Grid>
+                <Grid item xs={8}><Typography>{formatValue(oltData.ip_address)}</Typography></Grid>
                 
                 <Grid item xs={4}><Typography color="text.secondary">Location</Typography></Grid>
-                <Grid item xs={8}><Typography>{oltData.location}</Typography></Grid>
+                <Grid item xs={8}><Typography>{formatValue(oltData.location)}</Typography></Grid>
                 
                 <Grid item xs={4}><Typography color="text.secondary">Model</Typography></Grid>
-                <Grid item xs={8}><Typography>{oltData.model}</Typography></Grid>
+                <Grid item xs={8}><Typography>{formatValue(oltData.model)}</Typography></Grid>
                 
                 <Grid item xs={4}><Typography color="text.secondary">Serial Number</Typography></Grid>
-                <Grid item xs={8}><Typography>{oltData.serial_number}</Typography></Grid>
+                <Grid item xs={8}><Typography>{formatValue(oltData.serial_number)}</Typography></Grid>
               </Grid>
             </CardContent>
           </Card>
@@ -193,48 +186,39 @@ function OLTDetails() {
               <Grid container spacing={2}>
                 <Grid item xs={6}>
                   <Box sx={{ textAlign: 'center', p: 2 }}>
-                    <MemoryIcon sx={{ fontSize: 40, color: 'primary.main', mb: 1 }} />
-                    {metricsLoading ? <CircularProgress size={18} /> : metrics.cpu !== undefined && metrics.cpu !== null ? (
-                      <Typography variant="h6">{metrics.cpu}%</Typography>
-                    ) : (
-                      <Typography variant="h6">-</Typography>
-                    )}
+                    <SpeedIcon sx={{ fontSize: 40, color: 'primary.main', mb: 1 }} /> {/* Changed to SpeedIcon for CPU */}
+                    <Typography variant="h6">{formatValue(oltData.cpu_usage, '%')}</Typography>
                     <Typography color="text.secondary">CPU Usage</Typography>
-                    {metricsError && <Typography color="error" variant="caption">{metricsError}</Typography>}
                   </Box>
                 </Grid>
                 <Grid item xs={6}>
                   <Box sx={{ textAlign: 'center', p: 2 }}>
-                    <SpeedIcon sx={{ fontSize: 40, color: 'primary.main', mb: 1 }} />
-                    {metricsLoading ? <CircularProgress size={18} /> : metrics.memory !== undefined && metrics.memory !== null ? (
-                      <Typography variant="h6">{metrics.memory}%</Typography>
-                    ) : (
-                      <Typography variant="h6">-</Typography>
-                    )}
+                    <MemoryIcon sx={{ fontSize: 40, color: 'primary.main', mb: 1 }} /> {/* Changed to MemoryIcon for Memory */}
+                    <Typography variant="h6">{formatValue(oltData.memory_usage, '%')}</Typography>
                     <Typography color="text.secondary">Memory Usage</Typography>
-                    {metricsError && <Typography color="error" variant="caption">{metricsError}</Typography>}
                   </Box>
                 </Grid>
                 <Grid item xs={12}>
                   <Divider sx={{ my: 2 }} />
                 </Grid>
                 <Grid item xs={4}><Typography color="text.secondary">Uptime</Typography></Grid>
-                <Grid item xs={8}>
-                  {metricsLoading ? <CircularProgress size={18} /> : metrics.uptime !== undefined && metrics.uptime !== null ? `${metrics.uptime}` : '- None'}
-                  {metricsError && <Typography color="error" variant="caption">{metricsError}</Typography>}
-                </Grid>
+                <Grid item xs={8}><Typography>{formatValue(oltData.uptime)}</Typography></Grid>
                 
-                <Grid item xs={4}><Typography color="text.secondary">Temperature</Typography></Grid>
-                <Grid item xs={8}>
-                  {metricsLoading ? <CircularProgress size={18} /> : metrics.temperature !== undefined && metrics.temperature !== null ? `${metrics.temperature}°C` : '-'}
-                  {metricsError && <Typography color="error" variant="caption">{metricsError}</Typography>}
-                </Grid>
+                <Grid item xs={4}><Typography color="text.secondary">Board Temperature</Typography></Grid>
+                <Grid item xs={8}><Typography>{formatValue(oltData.temperature, '°C')}</Typography></Grid>
 
-                <Grid item xs={4}><Typography color="text.secondary">Total Cards</Typography></Grid>
-                <Grid item xs={8}>
-                  {metricsLoading ? <CircularProgress size={18} /> : metrics.total_cards !== undefined && metrics.total_cards !== null ? metrics.total_cards : '-'}
-                  {metricsError && <Typography color="error" variant="caption">{metricsError}</Typography>}
-                </Grid>
+                {/* Displaying env_temperature if available and different from board temperature */}
+                {oltData.env_temperature !== null && oltData.env_temperature !== undefined && oltData.env_temperature !== oltData.temperature && (
+                  <>
+                    <Grid item xs={4}><Typography color="text.secondary">Env. Temperature</Typography></Grid>
+                    <Grid item xs={8}><Typography>{formatValue(oltData.env_temperature, '°C')}</Typography></Grid>
+                  </>
+                )}
+
+                <Grid item xs={4}><Typography color="text.secondary">Total Cards (from DB)</Typography></Grid>
+                <Grid item xs={8}><Typography>{formatValue(oltData.total_cards)}</Typography></Grid>
+                {/* Note: total_cards from getSystemMetrics is not directly used here anymore, relying on oltData.total_cards */}
+
 
                 <Grid item xs={4}><Typography color="text.secondary">Power Supply</Typography></Grid>
                 <Grid item xs={8}>
@@ -269,122 +253,26 @@ function OLTDetails() {
               </Box>
             </CardContent>
           </Card>
-        </Grid>
+        </Grid>        
 
-        {/* ONT Metrics */}
-        <Grid item xs={12}>
+        {/* Metrics Polling Status */}
+        <Grid item xs={12} md={6}>
           <Card>
             <CardContent>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                <Typography variant="h6">ONT Metrics</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Status: {oltData.onu_status || 'Unknown'} | PON Port: {oltData.onu_pon_port || 'N/A'}
-                </Typography>
-              </Box>
-              {oltData.onu_description && (
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                  {oltData.onu_description}
-                </Typography>
-              )}
-              <Grid container spacing={3}>
-                {/* RX Power */}
-                <Grid item xs={12} sm={6} md={4}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <SignalCellularAltIcon color="primary" />
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        RX Power
-                      </Typography>
-                      <Typography variant="h6">
-                        {oltData.rx_power ? `${oltData.rx_power.toFixed(2)} dBm` : 'N/A'}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Grid>
-
-                {/* TX Power */}
-                <Grid item xs={12} sm={6} md={4}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <SignalCellularAltIcon color="primary" />
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        TX Power
-                      </Typography>
-                      <Typography variant="h6">
-                        {oltData.tx_power ? `${oltData.tx_power.toFixed(2)} dBm` : 'N/A'}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Grid>
-
-                {/* Distance */}
-                <Grid item xs={12} sm={6} md={4}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <StraightenIcon color="action" />
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        Distance
-                      </Typography>
-                      <Typography variant="h6">
-                        {oltData.distance ? `${oltData.distance} m` : 'N/A'}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Grid>
-
-                {/* Last Online */}
-                <Grid item xs={12} sm={6} md={4}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <EventIcon color="action" />
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        Last Online
-                      </Typography>
-                      <Typography variant="h6">
-                        {oltData.last_online ? new Date(oltData.last_online).toLocaleString() : 'N/A'}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Grid>
-
-                {/* Signal Status */}
-                <Grid item xs={12} sm={6} md={4}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    {oltData.los_detected ? (
-                      <WarningIcon color="error" />
-                    ) : (
-                      <CheckCircleIcon color="success" />
-                    )}
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        Signal Status
-                      </Typography>
-                      <Typography variant="h6" color={oltData.los_detected ? 'error.main' : 'success.main'}>
-                        {oltData.los_detected ? 'LOS Detected' : 'Signal OK'}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Grid>
-
-                {/* Firmware Version */}
-                <Grid item xs={12} sm={6} md={4}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <SystemUpdateIcon color="action" />
-                    <Box>
-                      <Typography variant="body2" color="text.secondary">
-                        Firmware Version
-                      </Typography>
-                      <Typography variant="h6">
-                        {oltData.firmware_version || 'N/A'}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Grid>
+              <Typography variant="h6" gutterBottom>Metrics Polling Status</Typography>
+              <Grid container spacing={1}>
+                <Grid item xs={5}><Typography color="text.secondary">Last Update:</Typography></Grid>
+                <Grid item xs={7}><Typography>{oltData.last_metrics_update ? new Date(oltData.last_metrics_update).toLocaleString() : 'N/A'}</Typography></Grid>
+                
+                <Grid item xs={5}><Typography color="text.secondary">Status:</Typography></Grid>
+                <Grid item xs={7}><Typography>{formatValue(oltData.metrics_status)}</Typography></Grid>
+                
+                <Grid item xs={5}><Typography color="text.secondary">Error:</Typography></Grid>
+                <Grid item xs={7}><Typography sx={{ color: oltData.metrics_error ? 'error.main' : 'inherit' }}>{formatValue(oltData.metrics_error) || 'None'}</Typography></Grid>
               </Grid>
             </CardContent>
           </Card>
         </Grid>
-
         {/* System Overview */}
         <Grid item xs={12}>
           <Grid container spacing={3}>
@@ -397,7 +285,7 @@ function OLTDetails() {
                       <Typography variant="body2" color="text.secondary">
                         Total Cards
                       </Typography>
-                      <Typography variant="h5">{metrics.total_cards || 0}</Typography>
+                      <Typography variant="h5">{formatValue(oltData.total_cards, '')}</Typography>
                     </Box>
                   </Box>
                 </CardContent>
@@ -412,7 +300,7 @@ function OLTDetails() {
                       <Typography variant="body2" color="text.secondary">
                         Uplink Ports
                       </Typography>
-                      <Typography variant="h5">{oltData.total_uplink_ports || 0}</Typography>
+                      <Typography variant="h5">{formatValue(oltData.total_uplink_ports, '')}</Typography>
                     </Box>
                   </Box>
                   <Box sx={{ flex: 1 }}>
@@ -422,11 +310,11 @@ function OLTDetails() {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <Typography variant="h6" sx={{
                         color: (theme) =>
-                          metrics.temperature > 70 ? theme.palette.error.main :
-                          metrics.temperature > 60 ? theme.palette.warning.main :
+                          oltData.temperature > 70 ? theme.palette.error.main :
+                          oltData.temperature > 60 ? theme.palette.warning.main :
                           'inherit'
                       }}>
-                        {metrics.temperature?.toFixed(1) || 'N/A'}°C
+                        {formatValue(oltData.temperature, '°C')}
                       </Typography>
                     </Box>
                   </Box>
@@ -437,7 +325,7 @@ function OLTDetails() {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <ScheduleIcon color="action" />
                       <Typography variant="h6">
-                        {metrics.uptime || 'N/A'}
+                        {formatValue(oltData.uptime)}
                       </Typography>
                     </Box>
                   </Box>
@@ -453,7 +341,7 @@ function OLTDetails() {
                       <Typography variant="body2" color="text.secondary">
                         PON Ports
                       </Typography>
-                      <Typography variant="h5">{oltData.total_pon_ports || 0}</Typography>
+                      <Typography variant="h5">{formatValue(oltData.total_pon_ports, '')}</Typography>
                     </Box>
                   </Box>
                 </CardContent>
@@ -468,7 +356,7 @@ function OLTDetails() {
                       <Typography variant="body2" color="text.secondary">
                         Active ONUs
                       </Typography>
-                      <Typography variant="h5">{oltData.active_onus || 0}</Typography>
+                      <Typography variant="h5">{formatValue(oltData.active_onus, '')}</Typography>
                     </Box>
                   </Box>
                 </CardContent>
@@ -477,6 +365,16 @@ function OLTDetails() {
           </Grid>
         </Grid>
       </Grid>
+      <Snackbar
+        open={notification.open}
+        autoHideDuration={6000}
+        onClose={() => setNotification({ ...notification, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setNotification({ ...notification, open: false })} severity={notification.severity} sx={{ width: '100%' }}>
+          {notification.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

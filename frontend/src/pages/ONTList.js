@@ -182,8 +182,9 @@ function ONTList() {
                   <TableCell>ONT Index</TableCell>
                   <TableCell>Serial Number</TableCell>
                   <TableCell>Status</TableCell>
-                  <TableCell>Rx Power (ONT)</TableCell>
                   <TableCell>Tx Power (ONT)</TableCell>
+                  <TableCell>Rx Power (ONT)</TableCell>
+                  <TableCell>Rx Power (OLT)</TableCell>
                   <TableCell>Last Down Time</TableCell>
                   <TableCell>Last Down Cause</TableCell>
                   <TableCell>Last Update</TableCell>
@@ -196,6 +197,7 @@ function ONTList() {
                     <TableCell>{ont.serial_number}</TableCell>
                     <TableCell>{getStatusChip(ont.status)}</TableCell>
                     <TableCell>{formatPower(ont.tx_power_at_ont)}</TableCell>
+                    <TableCell>{formatPower(ont.rx_power_at_ont)}</TableCell>
                     <TableCell>{formatPower(ont.rx_power_at_olt)}</TableCell>
                     <TableCell>{formatDate(ont.last_down_time)}</TableCell>
                     <TableCell>{ont.last_down_cause || 'N/A'}</TableCell>

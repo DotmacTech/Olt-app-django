@@ -17,7 +17,7 @@ from .serializers import ( # Import the new serializers
 from .utils.board_utils import get_installed_board_info # Assuming this is the correct pa
 # from .tasks import update_olt_metrics
 from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async
-from .tasks import discover_and_create_pon_ports_task, discover_and_update_onts_for_pon_port_task
+from .tasks import discover_and_create_cards_task, discover_and_create_pon_ports_task, discover_and_update_onts_for_pon_port_task, update_olt_system_metrics_task
 
 
 
@@ -195,12 +195,14 @@ class OLTViewSet(viewsets.ModelViewSet):
             return Response({"error": f"Card in slot {slot_number} not found for OLT {olt.name}."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({"error": f"Failed to initiate PON port refresh: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    # @action(detail=True, methods=['post'])
-    # def refresh_metrics(self, request, pk=None):
-    #     """Manually trigger metrics update for an OLT"""
-    #     olt = self.get_object()
-    #     task = update_olt_metrics.delay(olt.id)
-    #     return Response({'status': 'Metrics update initiated', 'task_id': task.id})
+    @action(detail=True, methods=['post'], url_path='refresh-system-metrics')
+    def refresh_system_metrics(self, request, pk=None):
+        """
+        Triggers a Celery task to refresh system metrics for the OLT.
+        """
+        olt = self.get_object()
+        update_olt_system_metrics_task.delay(olt.id)
+        return Response({"message": "System metrics refresh initiated."}, status=status.HTTP_202_ACCEPTED)
 
 class CardViewSet(viewsets.ModelViewSet):
     queryset = Card.objects.all()

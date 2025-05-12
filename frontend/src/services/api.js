@@ -206,3 +206,9 @@ export const triggerOntsRefresh = async (ponPortId) => {
     throw error;
   }
 };
+
+// Add this function to your api.js
+export const triggerOLTMetricsRefresh = async (oltId) => {
+  const response = await api.post(`/olts/${oltId}/refresh-system-metrics/`);
+  return response.data;
+};

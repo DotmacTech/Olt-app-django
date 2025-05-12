@@ -3,6 +3,7 @@ import re
 import json
 import time
 import asyncio
+import datetime # <--- ADD THIS IMPORT
 from pysnmp.hlapi.asyncio import *
 
 # Standard MIB OIDs
@@ -46,8 +47,8 @@ HUAWEI_ONT_RX_POWER_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4'
 HUAWEI_ONT_VOLTAGE_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.5'
 HUAWEI_ONT_OLT_RX_OPTICAL_POWER_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.6' # hwGponDeviceOntOpticalPowerReceivedFromOlt
 HUAWEI_ONT_TEMPERATURE_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.51.1.1'
-HUAWEI_ONT_LAST_DOWN_TIME_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.10' # hwGponDeviceOntLastDownTime (DateAndTime)
-HUAWEI_ONT_LAST_DOWN_CAUSE_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.11' # hwGponDeviceOntLastDownCause (Integer)
+HUAWEI_ONT_LAST_DOWN_TIME_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.23' # hwGponDeviceOntLastDownTime (DateAndTime)
+HUAWEI_ONT_LAST_DOWN_CAUSE_OID = '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.24' # hwGponDeviceOntLastDownCause (Integer)
 
 
 import os
@@ -195,7 +196,7 @@ def get_ont_info_per_port(ip,community,slot_num,number_of_ports): # This functio
         count = 0
         # The ONT status loop still has hardcoded IP/community/slot
         for ontid in range(128): 
-            ont_status_raw = asyncio.run(get_snmp_data("172.20.100.2",'pveT]jFu3y4r',HUAWEI_ONT_ACTIVE_STATUS_OID,2,port,ontid))
+            ont_status_raw = asyncio.run(get_snmp_data(ip,community,HUAWEI_ONT_ACTIVE_STATUS_OID,slot_num,port,ontid))
             try:
                 if ont_status_raw:
                     ont_status_val = int(ont_status_raw.split('=')[-1].strip())
@@ -217,133 +218,6 @@ def get_ont_info_per_port(ip,community,slot_num,number_of_ports): # This functio
         })
     
     return results
-
-# async def _walk_snmp_table(snmp_engine, auth_data, transport_target, oids_to_walk, table_base_oid):
-#     """Helper function to walk specified OIDs in an SNMP table."""
-#     results = {}
-#     iterator = await next_cmd(
-#             snmp_engine,
-#             auth_data,
-#             transport_target,
-#             ContextData(),
-#             *oids_to_walk,
-#             lexicographicMode=False
-#     )
-#     errorIndication, errorStatus, errorIndex, varBinds = iterator
-#     if errorIndication:
-#         print(f"SNMP walk error: {errorIndication}")
-#         raise Exception(f"SNMP walk error: {errorIndication}")
-#     elif errorStatus:
-#         error_msg = f"SNMP walk error: {errorStatus.prettyPrint()} at {errorIndex and varBinds[int(errorIndex) - 1][0] or '?'}"
-#         print(error_msg)
-#         raise Exception(error_msg)
-#     else:
-#         # Check if we are still within the table for the first OID walked
-#         if not varBinds[0][0].isPrefixOf(ObjectIdentity(table_base_oid)):
-#             return
-
-#         entry_index_tuple = varBinds[0][0].getSuffix() # Suffix is the index of the table entry
-#         entry_index_str = '.'.join(map(str, entry_index_tuple))
-
-#         if entry_index_str not in results:
-#             results[entry_index_str] = {}
-
-#         for oid_obj, val_obj in varBinds:
-#             # Store the value against the base OID that was walked
-#             # Find which of the oids_to_walk this oid_obj corresponds to
-#             for walked_oid_type in oids_to_walk:
-#                 walked_base_oid_str = str(walked_oid_type.getOid())
-#                 if str(oid_obj).startswith(walked_base_oid_str):
-#                     results[entry_index_str][walked_base_oid_str] = val_obj
-#                     break
-#     return results
-
-# async def get_installed_board_info_snmp(host, community, snmp_version='v2c', snmp_port=161, frame_id='0'):
-#     """
-#     Retrieves installed board information using SNMP (ENTITY-MIB and IF-MIB).
-#     Tries to match the output structure of board_utils.get_installed_board_info.
-#     """
-#     snmp_engine = SnmpEngine()
-#     auth_data = None
-#     if snmp_version.lower() == 'v1':
-#         auth_data = CommunityData(community, mpModel=0)
-#     elif snmp_version.lower() == 'v2c':
-#         auth_data = CommunityData(community, mpModel=1)
-#     else:
-#         raise ValueError(f"Unsupported SNMP version: {snmp_version}")
-
-#     transport_target = await UdpTransportTarget.create((host, snmp_port))
-
-#     # 1. Discover physical entities (potential cards) using ENTITY-MIB
-#     ent_oids_to_walk = [
-#         ObjectType(ObjectIdentity(OID_ENT_PHYSICAL_CLASS)),
-#         ObjectType(ObjectIdentity(OID_ENT_PHYSICAL_DESCR)),
-#         ObjectType(ObjectIdentity(OID_ENT_PHYSICAL_PARENT_REL_POS)),
-#         ObjectType(ObjectIdentity(OID_ENT_PHYSICAL_MODEL_NAME)),
-#         ObjectType(ObjectIdentity(OID_ENT_PHYSICAL_OPER_STATUS)),
-#         ObjectType(ObjectIdentity(OID_ENT_PHYSICAL_NAME)),
-#     ]
-#     physical_entities = await _walk_snmp_table(snmp_engine, auth_data, transport_target, ent_oids_to_walk, OID_ENT_PHYSICAL_TABLE)
-
-#     # 2. Discover interfaces using IF-MIB to count ports
-#     if_oids_to_walk = [
-#         ObjectType(ObjectIdentity(OID_IF_DESCR)),
-#         ObjectType(ObjectIdentity(OID_IF_TYPE)), # To filter for physical-like ports
-#     ]
-#     interfaces = await _walk_snmp_table(snmp_engine, auth_data, transport_target, if_oids_to_walk, OID_IF_TABLE)
-
-#     discovered_boards = []
-#     for ent_idx, entity_data in physical_entities.items():
-#         ent_class = entity_data.get(OID_ENT_PHYSICAL_CLASS)
-#         if ent_class and int(ent_class) == 9:  # entPhysicalClass 9 is 'module' (typically a card)
-#             slot_num_val = entity_data.get(OID_ENT_PHYSICAL_PARENT_REL_POS)
-#             slot_num = int(slot_num_val) if slot_num_val is not None else -1
-
-#             # Attempt to match frame_id if entity name/description contains it.
-#             # entPhysicalName might contain something like "Slot 0" or "Board 0/1"
-#             # This part is highly vendor-dependent for precise frame/slot matching from ENTITY-MIB.
-#             # For simplicity, we're taking all class 9 modules. Refine if needed.
-
-#             board_name_val = entity_data.get(OID_ENT_PHYSICAL_MODEL_NAME) or entity_data.get(OID_ENT_PHYSICAL_DESCR)
-#             board_name = str(board_name_val) if board_name_val else "Unknown Board"
-
-#             oper_status_val = entity_data.get(OID_ENT_PHYSICAL_OPER_STATUS)
-#             status_str = "Unknown"
-#             online_status_str = "Unknown" # SSH script has 'Online'/'Offline'
-#             if oper_status_val:
-#                 oper_status = int(oper_status_val)
-#                 if oper_status == 1: status_str, online_status_str = "Normal", "Online" # up
-#                 elif oper_status == 2: status_str, online_status_str = "Offline", "Offline" # down
-#                 elif oper_status == 3: status_str, online_status_str = "Testing", "Online" # testing
-
-#             # Count ports for this card by matching ifDescr
-#             port_count = 0
-#             # Construct a regex pattern to match interfaces for this slot, e.g., "Eth0/1/", "PON 0/1/"
-#             # This is a generic attempt; Huawei might have specific naming.
-#             # Example: ifDescr often contains "slot/port" or "frame/slot/port"
-#             # We need a reliable way to link ifDescr to the entPhysicalParentRelPos (slot_num)
-#             # For Huawei, ifDescr might be like "GigabitEthernet0/3/0" where 3 is slot.
-#             # This part is complex and vendor-specific.
-#             # A simpler approach for now: if the card is a PON card, count PON ports using Huawei specific OIDs if possible,
-#             # or count all physical interfaces whose ifDescr seems to belong to this slot.
-#             # The SSH script's `display port desc {frame}/{slot_id}` is more direct.
-#             # Placeholder for port_count, as reliable SNMP counting is complex.
-
-#             discovered_boards.append({
-#                 "slot": slot_num,
-#                 "board_name": board_name,
-#                 "status": status_str,
-#                 "online_status": online_status_str, # From entPhysicalOperStatus
-#                 "port_count": 0,  # Placeholder: Accurate port count per card via SNMP is complex
-#             })
-
-#     return {
-#         "data": {
-#             "total_slots": -1, # Placeholder: Determining total slots via ENTITY-MIB is complex
-#             "installed_cards": len(discovered_boards),
-#             "boards": sorted(discovered_boards, key=lambda x: x['slot'])
-#         }
-#     }
 
 def get_ssh_metrics(host, username, password, board):
     ssh = paramiko.SSHClient()
@@ -539,14 +413,17 @@ def parse_snmp_date_and_time(octet_string_val):
     Returns a datetime object (naive, UTC if no offset) or None.
     """
     if not octet_string_val or not hasattr(octet_string_val, 'asOctets'):
+        # print(f"DEBUG parse_snmp_date_and_time: octet_string_val is None or not an ObjectSyntax instance: {octet_string_val}")
         return None
     
     octets = octet_string_val.asOctets()
     length = len(octets)
+    # print(f"DEBUG parse_snmp_date_and_time: Received octets (len={length}): {octets.hex() if octets else 'empty'}")
 
     if length not in (8, 11):
-        # print(f"Invalid DateAndTime length: {length}, octets: {octets.hex()}")
+        # print(f"DEBUG parse_snmp_date_and_time: Invalid DateAndTime length: {length}, octets: {octets.hex() if octets else 'empty'}")
         return None
+    
 
     try:
         year = (octets[0] << 8) + octets[1]
@@ -572,10 +449,10 @@ def parse_snmp_date_and_time(octet_string_val):
             dt = dt.replace(tzinfo=datetime.timezone.utc)
         return dt
     except ValueError as e:
-        # print(f"Error parsing DateAndTime '{octets.hex()}': {e}")
+        print(f"DEBUG parse_snmp_date_and_time: ValueError parsing DateAndTime '{octets.hex()}': {e}")
         return None
     except Exception as e:
-        # print(f"Generic error parsing DateAndTime '{octets.hex()}': {e}")
+        print(f"DEBUG parse_snmp_date_and_time: Generic error parsing DateAndTime '{octets.hex()}': {e}")
         return None
 
 async def _fetch_one_ont_details_async(ip, community, slot_num, port_num, ont_idx, snmp_port=161):
@@ -593,7 +470,7 @@ async def _fetch_one_ont_details_async(ip, community, slot_num, port_num, ont_id
         return_exceptions=True # Allow individual tasks to fail
     )
 
-    print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: SN_RAW='{sn_raw}', STATUS_RAW='{status_raw}'")
+    # print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: SN_RAW='{sn_raw}', STATUS_RAW='{status_raw}'")
 
     # Helper to parse raw SNMP string "OID = TYPE: Value"
     def parse_val(raw, data_type_converter=str):
@@ -622,7 +499,7 @@ async def _fetch_one_ont_details_async(ip, community, slot_num, port_num, ont_id
         except: return None
 
     serial_number_hex = parse_val(sn_raw) # e.g., "48575443EA7508A0"
-    print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: serial_number_hex='{serial_number_hex}'")
+    # print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: serial_number_hex='{serial_number_hex}'")
     
     # For Hex-STRING, the value might be prefixed with "0x" by some SNMP libraries/devices, or not.
     # bytes.fromhex() does not want "0x".
@@ -633,28 +510,89 @@ async def _fetch_one_ont_details_async(ip, community, slot_num, port_num, ont_id
         else:
             processed_hex_for_sn = serial_number_hex
             
-    serial_number = bytes.fromhex(processed_hex_for_sn).decode('ascii', errors='replace') if processed_hex_for_sn else None
-    print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: final_serial_number='{serial_number}'")
+    # Process serial number for a more readable format: VENDOR_ASCII_PREFIX + UNIQUE_ID_HEX_SUFFIX
+    serial_number_to_return = None
+    if processed_hex_for_sn:
+        # Standard vendor prefix is 4 chars (8 hex digits)
+        if len(processed_hex_for_sn) >= 8:
+            vendor_hex_part = processed_hex_for_sn[:8]
+            id_hex_part = processed_hex_for_sn[8:]
+            try:
+                vendor_ascii_part = bytes.fromhex(vendor_hex_part).decode('ascii')
+                # Keep only alphanumeric characters from the decoded vendor prefix
+                cleaned_vendor_ascii = "".join(filter(str.isalnum, vendor_ascii_part))
+                
+                if cleaned_vendor_ascii: # Ensure we got a non-empty alphanumeric prefix
+                    serial_number_to_return = f"{cleaned_vendor_ascii.upper()}{id_hex_part.upper()}"
+                else:
+                    # If cleaned prefix is empty, the original vendor part was not suitable.
+                    # Fallback to full hex string to avoid '????' or similar from 'replace' if it was all non-alnum.
+                    serial_number_to_return = processed_hex_for_sn.upper()
+            except (UnicodeDecodeError, ValueError): # ValueError for invalid hex
+                # If vendor part is not ASCII or hex is invalid, use the full hex string.
+                serial_number_to_return = processed_hex_for_sn.upper()
+        else:
+            # If too short for standard format, just use the hex string as is.
+            serial_number_to_return = processed_hex_for_sn.upper()
+
+    serial_number = serial_number_to_return # This variable will be used in the return dict
+    # print(f"DEBUG SNMP UTIL _fetch_one_ont: OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx} :: final_serial_number='{serial_number}'")
 
     ont_status_map = {"1": "online", "2": "offline"} # Example mapping
     status_code = parse_val(status_raw, int)
     status = ont_status_map.get(str(status_code), "unknown") if status_code is not None else "unknown"
 
-    # Power values are typically in 0.01 dBm, convert to dBm
-    rx_power_at_ont = parse_val(rx_ont_raw, lambda x: float(x) * 0.01 if x.replace('.', '', 1).isdigit() else None)
-    tx_power_at_ont = parse_val(tx_ont_raw, lambda x: float(x) * 0.01 if x.replace('.', '', 1).isdigit() else None)
-    rx_power_at_olt = parse_val(rx_olt_raw, lambda x: float(x) * 0.01 if x.replace('.', '', 1).isdigit() else None)
+    # Helper to parse power values, convert to dBm, and handle placeholders
+    def power_value_converter(raw_snmp_value_string):
+        value_str_from_snmp = parse_val(raw_snmp_value_string, str) # Extracts "VALUE" from "OID = TYPE: VALUE"
+
+        if value_str_from_snmp is None:
+            return None
+        try:
+            num_int = int(value_str_from_snmp)
+            if num_int == 2147483647: # Placeholder for "not available" or error
+                return None
+            return float(num_int) * 0.01 # Convert from 0.01dBm units to dBm
+        except ValueError:
+            # print(f"Warning: Power value string '{value_str_from_snmp}' is not a simple integer. Raw: {raw_snmp_value_string}")
+            return None
+
+    rx_power_at_ont = power_value_converter(rx_ont_raw)
+    tx_power_at_ont = power_value_converter(tx_ont_raw)
+    rx_power_at_olt = power_value_converter(rx_olt_raw)
 
     last_down_time = parse_snmp_date_and_time(ldt_obj_syntax) if not isinstance(ldt_obj_syntax, Exception) else None # ldt_obj_syntax is the ObjectSyntax itself
     
     # Last down cause mapping (example, needs to be verified for Huawei)
     # 1: dying-gasp, 2: losi, 3: lofi, 4: sfi, 5: loai, 6: loami, etc.
+    # Updated based on hwGponDeviceOntControlLastDownCause 1.3.6.1.4.1.2011.6.128.1.1.2.46.1.24
     last_down_cause_code = parse_val(ldc_raw, int)
-    last_down_cause_map = {1: "dying-gasp", 2: "loss-of-signal", 3: "loss-of-frame", 4: "signal-fail"} # Add more as known
+    last_down_cause_map = {
+        1: "LOS (Loss of signal)",
+        2: "LOSi (Loss of signal for ONUi)",
+        3: "LOFi (Loss of frame of ONUi)",
+        4: "SFi (Signal fail of ONUi)",
+        5: "LOAi (Loss of acknowledge with ONUi)",
+        6: "LOAMi (Loss of PLOAM for ONUi)",
+        7: "Deactive ONT fails",
+        8: "Deactive ONT success",
+        9: "Reset ONT",
+        10: "Re-register ONT",
+        11: "Pop up fail",
+        13: "Dying-gasp",
+        15: "LOKI (Loss of key synch with ONUi)",
+        -1: "Query fails"
+    }
     last_down_cause = last_down_cause_map.get(last_down_cause_code, str(last_down_cause_code) if last_down_cause_code is not None else "unknown")
 
+    # If ONT is offline, power levels are often irrelevant or misleading, set to None
+    if status == "offline":
+        rx_power_at_ont = None
+        tx_power_at_ont = None
+        rx_power_at_olt = None
+
     if not serial_number: # If no serial number, this ONT entry is likely not valid/configured
-        print(f"DEBUG SNMP UTIL _fetch_one_ont: No serial number found for OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx}, returning None.")
+        # print(f"DEBUG SNMP UTIL _fetch_one_ont: No serial number found for OLT={ip}, Slot={slot_num}, Port={port_num}, ONT_IDX={ont_idx}, returning None.")
         return None
 
     return {
@@ -695,21 +633,9 @@ async def get_all_ont_details_for_pon_port_async(ip, community, slot_num, port_n
             results.append(data)
     return results
 
-# Example of calling it (e.g., in an async task or view)
-# from .utils.snmp_utils import get_installed_board_info_snmp
-# import asyncio
-
-# async def main_test():
-#     host = "172.20.100.2"
-#     community = "pveT]jFu3y4r"
-#     try:
-#         board_info = await get_installed_board_info_snmp(host, community)
-#         print(json.dumps(board_info, indent=2))
-#     except Exception as e:
-#         print(f"Error: {e}")
-
 if __name__ == "__main__":
     #print(compile_all_mibs())
     #get_system_metrics("172.20.100.2",'splynx',"Dotmac@Splynx1")
     #asyncio.run(main_test())
+    print(asyncio.run(get_all_ont_details_for_pon_port_async("172.20.100.2","pveT]jFu3y4r",2,1,7)))
     print()

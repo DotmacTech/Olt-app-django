@@ -34,11 +34,17 @@ class OLTDetailSerializer(serializers.ModelSerializer):
         model = OLT
         fields = [
             'id', 'name', 'ip_address', 'location', 'description', 'model',
-            'serial_number', 'firmware_version', 'status', 'uptime', 'last_seen',
-            'cpu_usage', 'memory_usage', 'env_temperature', 'power_supply_status',
+            'serial_number', 'firmware_version', 'status', 
+            'uptime', # From DB, updated by refresh task
+            'last_seen',
+            'cpu_usage', # From DB, updated by refresh task
+            'memory_usage', # From DB, updated by refresh task
+            'temperature', # From DB (board temp), updated by refresh task
+            'env_temperature', # Separate environment temperature if available
+            'power_supply_status',
             'management_vlan', 'snmp_ro_community', 'snmp_version', 'created_at',
-            'updated_at', 'total_cards', 'total_pon_ports', 'total_uplink_ports',
-            'total_vlans', 'active_onus'
+            'updated_at', 'total_cards', 'total_pon_ports', 'total_uplink_ports', 'total_vlans', 'active_onus',
+            'last_metrics_update', 'metrics_status', 'metrics_error' # Add these fields
         ]
 
 # Serializer specifically for Creating/Updating OLTs

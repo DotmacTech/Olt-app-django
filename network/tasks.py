@@ -2,119 +2,10 @@ from celery import shared_task
 from django.utils import timezone
 import asyncio
 
-from .models import OLT, Card, PONPort, ONU, ONUType
-from .utils.snmp_utils import get_system_metrics as get_snmp_system_metrics # Assuming you might have this
+from .models import OLT, Card, PONPort, ONU, ONUType # Ensure OLT is imported
+from .utils.snmp_utils import get_system_metrics # Assuming you might have this
 from .utils.board_utils import get_installed_board_info # SSH based card discovery
-from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async # Import new ONT fetcher
-
-
-# logger = logging.getLogger(__name__)
-
-# # Configure periodic tasks
-# app.conf.beat_schedule = {
-#     'update-all-olts-metrics': {
-#         'task': 'network.tasks.update_all_olts_metrics',
-#         'schedule': crontab(minute='*/5'),  # Run every 5 minutes
-#     },
-# }
-
-# @shared_task(bind=True, max_retries=3)
-# async def update_olt_metrics(self, olt_id):
-#     try:
-#         olt = OLT.objects.get(id=olt_id)
-        
-#         # Initialize SNMP client
-#         client = SNMPClient(
-#             host=olt.ip_address,
-#             community=olt.snmp_ro_community,
-#             port=olt.snmp_port,
-#             version=olt.snmp_version,
-#             timeout=10,
-#             retries=2
-#         )
-        
-#         # Get metrics
-#         metrics = await client.get_system_metrics()
-        
-#         # Update OLT with new metrics
-#         olt.temperature = metrics.get('temperature')
-#         olt.uptime = metrics.get('uptime')
-#         olt.cpu_usage = metrics.get('cpu_usage')
-#         olt.memory_usage = metrics.get('memory_usage')
-#         olt.memory_total = metrics.get('memory_total')
-#         olt.memory_free = metrics.get('memory_free')
-#         olt.storage_usage = metrics.get('storage_usage')
-#         olt.last_metrics_update = metrics['timestamp']
-#         olt.metrics_status = metrics['status']
-#         olt.metrics_error = metrics.get('error')
-        
-#         olt.save()
-        
-#         if metrics['status'] == 'success':
-#             logger.info(
-#                 "Updated metrics for OLT %s: CPU=%s%%, Memory=%s%%, Temp=%s°C",
-#                 olt.name,
-#                 olt.cpu_usage,
-#                 olt.memory_usage,
-#                 olt.temperature
-#             )
-#             return True
-#         else:
-#             logger.error(
-#                 "Failed to get some metrics for OLT %s: %s",
-#                 olt.name,
-#                 metrics.get('error', 'Unknown error')
-#             )
-#             return False
-        
-#     except OLT.DoesNotExist:
-#         logger.error("OLT with id %s not found", olt_id)
-#         return False
-        
-#     except SNMPError as e:
-#         # Retry on SNMP errors with exponential backoff
-#         retry_countdown = 60 * (2 ** self.request.retries)  # 60s, 120s, 240s
-#         self.retry(exc=e, countdown=retry_countdown)
-        
-#     except Exception as e:
-#         logger.error(
-#             "Critical error updating metrics for OLT %s: %s",
-#             olt_id,
-#             str(e),
-#             exc_info=True
-#         )
-#         return False
-
-# @shared_task
-# def update_all_olts_metrics():
-#     """Update metrics for all OLTs"""
-#     try:
-#         # Get OLTs that haven't been updated in the last 4 minutes
-#         cutoff_time = timezone.now() - timezone.timedelta(minutes=4)
-#         olts = OLT.objects.filter(
-#             models.Q(last_metrics_update__isnull=True) |
-#             models.Q(last_metrics_update__lt=cutoff_time)
-#         )
-        
-#         logger.info("Starting metrics update for %d OLTs", olts.count())
-        
-#         for olt in olts:
-#             # Add some randomization to prevent all tasks starting at once
-#             countdown = random.randint(0, 30)
-#             update_olt_metrics.apply_async(
-#                 args=[olt.id],
-#                 countdown=countdown
-#             )
-        
-#         return True
-        
-#     except Exception as e:
-#         logger.error(
-#             "Failed to schedule OLT metrics updates: %s",
-#             str(e),
-#             exc_info=True
-#         )
-#         return False
+from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async, get_ssh_metrics # Import new ONT fetcher
 
 @shared_task
 def discover_and_create_cards_task(olt_id):
@@ -287,4 +178,57 @@ def discover_and_update_onts_for_pon_port_task(pon_port_id):
         import traceback
         traceback.print_exc()
         raise
-    # celery -A oltmanager worker -l info -P threads
+   
+
+@shared_task
+def update_olt_system_metrics_task(olt_id):
+    """
+    Celery task to fetch and update system metrics for a given OLT.
+    """
+    try:
+        olt = OLT.objects.get(pk=olt_id)
+        print(f"Starting system metrics update for OLT: {olt.name} ({olt.ip_address})")
+
+        # get_system_metrics uses SSH and defaults board to '0/2' if not specified.
+        # Adjust board parameter if needed, or make it configurable per OLT.
+        # For now, we rely on its default or pass None if appropriate.
+        # The board parameter in get_system_metrics is for specific SSH commands.
+        # If your OLT model has a field for the main control board, use it here.
+        # e.g., main_board_identifier = olt.main_control_board_slot_identifier or '0/2'
+        metrics = get_system_metrics(
+            host=olt.ip_address,
+            ssh_username=olt.telnet_username, # Assuming telnet_username is used for SSH
+            ssh_password=olt.telnet_password  # Assuming telnet_password is used for SSH
+            # board=main_board_identifier # Pass a specific board if necessary
+        )
+
+        if metrics and metrics.get('status') == 'success':
+            olt.uptime = metrics.get('uptime', olt.uptime)
+            olt.cpu_usage = metrics.get('cpu', olt.cpu_usage)
+            olt.memory_usage = metrics.get('memory', olt.memory_usage) # 'memory' from metrics is usage %
+            olt.temperature = metrics.get('temperature', olt.temperature) # 'temperature' from metrics
+            olt.metrics_status = 'success'
+            olt.metrics_error = None
+        elif metrics:
+            olt.metrics_status = 'error'
+            olt.metrics_error = metrics.get('error', 'Unknown error during metrics fetch.')
+        
+        olt.last_metrics_update = timezone.now()
+        olt.save()
+        print(f"Successfully updated system metrics for OLT: {olt.name}")
+    except OLT.DoesNotExist:
+        print(f"OLT with ID {olt_id} not found for metrics update.")
+    except Exception as e:
+        print(f"Error in update_olt_system_metrics_task for OLT ID {olt_id}: {e}")
+        try:
+            # Attempt to save error status to the OLT object if it exists
+            olt_obj = OLT.objects.get(pk=olt_id)
+            olt_obj.metrics_status = 'error'
+            olt_obj.metrics_error = str(e)
+            olt_obj.last_metrics_update = timezone.now()
+            olt_obj.save()
+        except OLT.DoesNotExist:
+            pass # OLT not found, nothing to save error to
+        except Exception as save_e:
+            print(f"Could not save error status to OLT {olt_id} after task failure: {save_e}")
+ # celery -A oltmanager worker -l info -P threads
