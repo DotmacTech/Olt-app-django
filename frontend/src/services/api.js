@@ -212,3 +212,21 @@ export const triggerOLTMetricsRefresh = async (oltId) => {
   const response = await api.post(`/olts/${oltId}/refresh-system-metrics/`);
   return response.data;
 };
+
+export const getONTDetails = async (ponPortId, ontId) => {
+  const response = await api.get(`/pon-ports/${ponPortId}/onts/${ontId}/`);
+  return response.data;
+};
+
+// Fetch OLT name and PON Port index for breadcrumbs/headers on ONT list/detail pages
+export const getOltAndPonPortInfoForONTList = async (oltId, slotNumber, ponPortId) => {
+  try {
+    // This endpoint needs to be created on the backend.
+    // It should return { olt_name: "...", pon_port: { port_index_on_card: "..." } }
+    const response = await api.get(`/olts/${oltId}/slot/${slotNumber}/ponport/${ponPortId}/info-for-ont-list/`);
+    return response.data;
+  } catch (error) {
+    console.error(`Error fetching OLT/PON Port info for OLT ${oltId}, Slot ${slotNumber}, PON Port ${ponPortId}:`, error.response || error.message);
+    throw error;
+  }
+};

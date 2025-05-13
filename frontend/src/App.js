@@ -17,6 +17,7 @@ import Advanced from './pages/Advanced';
 import AddOLT from './pages/AddOLT';
 import PONPort from './pages/PONPort'; 
 import ONTList from './pages/ONTList'; // Import the new ONTList page
+import ONTDetailPage from './pages/ONTDetailPage'; // Import the new ONT Detail page
 
 const theme = createTheme({
   palette: {
@@ -57,6 +58,8 @@ function App() {
             <Route path="/olts/:oltId/slot/:slotNumber/ponports" element={<PONPort />} /> 
             {/* Route for listing ONTs on a specific PON Port */}
             <Route path="/olts/:oltId/slot/:slotNumber/ponport/:ponPortId/onts" element={<ONTList />} />
+            {/* Route for specific ONT details */}
+            <Route path="/olts/:oltId/slot/:slotNumber/ponport/:ponPortId/ont/:ontId" element={<ONTDetailPage />} />
           </Routes>
         </Layout>
       </Router>

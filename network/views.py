@@ -1,10 +1,14 @@
-from rest_framework import viewsets, status, generics, mixins
 import asyncio
-from django.shortcuts import get_object_or_404
-from rest_framework.decorators import action
-from rest_framework.response import Response
 from django.utils import timezone
 from datetime import timedelta
+
+from rest_framework import viewsets, status, generics, mixins
+from django.shortcuts import get_object_or_404
+from rest_framework.decorators import action,api_view, permission_classes # For function-based views
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated # Or AllowAny if no auth yet
+
+
 from .models import (
     OLT, Card, PONPort, UplinkPort, VLAN,
     ONUType, ONU, Zone, ODB, SpeedProfile
@@ -17,7 +21,14 @@ from .serializers import ( # Import the new serializers
 from .utils.board_utils import get_installed_board_info # Assuming this is the correct pa
 # from .tasks import update_olt_metrics
 from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async
-from .tasks import discover_and_create_cards_task, discover_and_create_pon_ports_task, discover_and_update_onts_for_pon_port_task, update_olt_system_metrics_task
+from .tasks import (
+    discover_and_create_cards_task, 
+    discover_and_create_pon_ports_task, 
+    discover_and_update_onts_for_pon_port_task, 
+    update_olt_system_metrics_task,
+    check_olt_reachability_task 
+)
+
 
 
 
@@ -203,6 +214,14 @@ class OLTViewSet(viewsets.ModelViewSet):
         olt = self.get_object()
         update_olt_system_metrics_task.delay(olt.id)
         return Response({"message": "System metrics refresh initiated."}, status=status.HTTP_202_ACCEPTED)
+    @action(detail=True, methods=['post'], url_path='check-reachability')
+    def check_reachability(self, request, pk=None):
+        """
+        Triggers a Celery task to check OLT reachability via ping.
+        """
+        olt = self.get_object()
+        check_olt_reachability_task.delay(olt.id)
+        return Response({"message": "OLT reachability check initiated."}, status=status.HTTP_202_ACCEPTED)
 
 class CardViewSet(viewsets.ModelViewSet):
     queryset = Card.objects.all()
@@ -264,8 +283,41 @@ class ONUViewSet(mixins.ListModelMixin,
         except Exception as e:
             return Response(
                 {"error": f"Failed to initiate ONT details refresh: {str(e)}"},
+                
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+@api_view(['GET'])
+# Add permission_classes as needed, e.g., [IsAuthenticated] or [AllowAny] for now
+# @permission_classes([AllowAny]) 
+def get_olt_pon_port_context_info(request, olt_id, slot_number, pon_port_id):
+    """
+    Provides context information (OLT name, PON port index) 
+    for breadcrumbs or headers on ONT list/detail pages.
+    """
+    olt = get_object_or_404(OLT, pk=olt_id)
+    
+    try:
+        # Ensure pon_port_id is treated as an integer for the lookup
+        pon_port_pk = int(pon_port_id)
+        pon_port = get_object_or_404(PONPort, pk=pon_port_pk)
+    except ValueError:
+        return Response({"error": "Invalid PON Port ID format."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Validate that the PON port belongs to the specified OLT and Slot
+    if pon_port.card.olt_id != olt.id or pon_port.card.slot_number != int(slot_number):
+        return Response(
+            {"error": "PON Port does not match the specified OLT and Slot."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    data = {
+        "olt_name": olt.name,
+        "pon_port": {
+            "id": pon_port.id,
+            "port_index_on_card": pon_port.port_index_on_card
+        }
+    }
+    return Response(data, status=status.HTTP_200_OK)
 class ZoneViewSet(viewsets.ModelViewSet):
     queryset = Zone.objects.all()
     serializer_class = ZoneSerializer

@@ -10,9 +10,9 @@ import { getOntsForPonPort, triggerOntsRefresh, getPonPortDetailsForSlot, getOLT
 
 function ONTList() {
   const { oltId, slotNumber, ponPortId } = useParams();
-  const navigate = useNavigate();
   const [onts, setOnts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
   const [error, setError] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
@@ -124,6 +124,10 @@ function ONTList() {
     return <Chip label={status || "Unknown"} color="default" size="small" />;
   };
 
+  const handleRowClick = (ont) => {
+    navigate(`/olts/${oltId}/slot/${slotNumber}/ponport/${ponPortId}/ont/${ont.id}`);
+  };
+
   const formatPower = (power) => (power !== null && power !== undefined ? `${power.toFixed(2)} dBm` : 'N/A');
   const formatDate = (dateString) => (dateString ? new Date(dateString).toLocaleString() : 'N/A');
 
@@ -192,7 +196,12 @@ function ONTList() {
               </TableHead>
               <TableBody>
                 {onts.map((ont) => (
-                  <TableRow key={ont.id} hover>
+                  <TableRow 
+                  key={ont.id} 
+                  hover 
+                  onClick={() => handleRowClick(ont)}
+                  sx={{ cursor: 'pointer' }}
+                >
                     <TableCell>{ont.ont_index_on_port}</TableCell>
                     <TableCell>{ont.serial_number}</TableCell>
                     <TableCell>{getStatusChip(ont.status)}</TableCell>

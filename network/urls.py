@@ -4,7 +4,7 @@ from rest_framework_nested import routers # For nested routers
 from .views import (
     OLTViewSet, CardViewSet, PONPortViewSet, UplinkPortViewSet, VLANViewSet,
     ONUTypeViewSet, ONUViewSet, ZoneViewSet, ODBViewSet, SpeedProfileViewSet,
-    SystemMetricsAPIView
+    SystemMetricsAPIView,get_olt_pon_port_context_info 
 )
 # from .api.views import OLTViewSet
 from django.urls import path, include
@@ -38,4 +38,9 @@ urlpatterns = [
     path('', include(olts_router.urls)),
     path('', include(pon_ports_router.urls)),
     path('system-metrics/', SystemMetricsAPIView.as_view(), name='system-metrics'),
+    path(
+        'olts/<int:olt_id>/slot/<int:slot_number>/ponport/<int:pon_port_id>/info-for-ont-list/',
+        get_olt_pon_port_context_info,
+        name='olt-ponport-context-info'
+    ),
 ]

@@ -231,4 +231,75 @@ def update_olt_system_metrics_task(olt_id):
             pass # OLT not found, nothing to save error to
         except Exception as save_e:
             print(f"Could not save error status to OLT {olt_id} after task failure: {save_e}")
- # celery -A oltmanager worker -l info -P threads
+@shared_task
+def check_olt_reachability_task(olt_id):
+    """
+    Celery task to check OLT reachability via ping and update its status.
+    """
+    try:
+        olt = OLT.objects.get(pk=olt_id)
+        print(f"Checking reachability for OLT: {olt.name} ({olt.ip_address})")
+
+        is_reachable = ping_host(olt.ip_address)
+
+        new_status = 'active' if is_reachable else 'inactive'
+
+        if olt.status != new_status:
+            olt.status = new_status
+            # last_seen is auto_now=True, so it will be updated on save
+            olt.save(update_fields=['status', 'last_seen']) 
+            print(f"OLT {olt.name} reachability: {is_reachable}. Status set to {new_status}.")
+        else:
+            # Even if status hasn't changed, update last_seen to show we checked
+            olt.save(update_fields=['last_seen'])
+            print(f"OLT {olt.name} reachability: {is_reachable}. Status remains {new_status}.")
+
+    except OLT.DoesNotExist:
+        print(f"OLT with ID {olt_id} not found for reachability check.")
+    except Exception as e:
+        print(f"Error in check_olt_reachability_task for OLT ID {olt_id}: {e}")
+        try:
+            olt_obj = OLT.objects.get(pk=olt_id)
+            olt_obj.status = 'error' # Indicate an error during the ping check itself
+            olt_obj.save(update_fields=['status', 'last_seen'])
+        except Exception: # Catch OLT.DoesNotExist or other save errors
+            pass # Logged above or OLT doesn't exist
+
+@shared_task
+def periodically_update_all_onts_data():
+    """
+    Celery task to be run periodically by Celery Beat.
+    It iterates through all PON Ports and queues an ONT update task for each.
+    """
+    print(f"[{timezone.now()}] Starting periodic update for all ONTs data...")
+    # We only want to update ONTs for PON ports that belong to active OLTs
+    # and have a configured SNMP community string.
+    active_pon_ports = PONPort.objects.filter(
+        card__olt__status='active', 
+        card__olt__snmp_ro_community__isnull=False
+    ).exclude(card__olt__snmp_ro_community__exact='')
+
+    for pon_port in active_pon_ports:
+        print(f"[{timezone.now()}] Queueing ONT data update for PON Port ID: {pon_port.id} (OLT: {pon_port.card.olt.name}, Card: {pon_port.card.slot_number}, Port: {pon_port.port_index_on_card})")
+        discover_and_update_onts_for_pon_port_task.delay(pon_port.id)
+    
+    print(f"[{timezone.now()}] Finished queueing ONT data updates for {active_pon_ports.count()} PON Ports.")
+
+
+@shared_task
+def periodically_check_all_olts_reachability():
+    """
+    Celery task to be run periodically by Celery Beat.
+    It iterates through all OLTs and queues a reachability check for each.
+    """
+    print("Starting periodic check for all OLTs reachability...")
+    olts = OLT.objects.filter(status__in=['active', 'error', 'unknown', 'inactive']) # Or simply OLT.objects.all() if you want to check all regardless of current status
+    
+    for olt in olts:
+        print(f"Queueing reachability check for OLT: {olt.name} (ID: {olt.id})")
+        check_olt_reachability_task.delay(olt.id)
+    
+    print(f"Finished queueing reachability checks for {olts.count()} OLTs.")
+
+
+# celery -A oltmanager worker -l info -P threads

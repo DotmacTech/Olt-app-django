@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'network',
+    'django_celery_beat',
 ]
 
 MIDDLEWARE = [
@@ -60,12 +61,28 @@ TEMPLATES = [
 WSGI_APPLICATION = 'oltmanager.wsgi.application'
 
 # Database
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
+
 DATABASES = {
+
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': 'oltmanager',
+        'USER': 'dotmacuser',
+        'PASSWORD': 'dotmac@1',
+        'HOST': 'localhost',
+        'PORT': '',
+
     }
+
 }
+
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -113,3 +130,6 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Lagos' # e.g., 'UTC' or 'Africa/Lagos'
+
+# Celery Beat Settings (if you want to store schedules in the database with django-celery-beat)
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'

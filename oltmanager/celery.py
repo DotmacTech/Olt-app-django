@@ -1,9 +1,16 @@
 # c:\Users\ibrah\CascadeProjects\Olt-app-django\oltmanager\celery.py
 import os
+# import django # Import Django
 from celery import Celery
+from celery.schedules import crontab # For cron-like scheduling
 
 # Set the default Django settings module for the 'celery' program.
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'oltmanager.settings') # Replace 'oltmanager' with your project's name
+
+# django.setup() # Explicitly setup Django settings
+
+# Now that Django is set up, we can safely import tasks that might depend on Django models/settings
+# from network.tasks import periodically_check_all_olts_reachability, periodically_update_all_onts_data # Be specific if possible
 
 app = Celery('oltmanager') # Replace 'oltmanager' with your project's name
 
@@ -15,6 +22,35 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks()
+
+@app.on_after_configure.connect
+def setup_periodic_tasks(sender : Celery, **kwargs):
+    """
+    Celery task to be run periodically by Celery Beat.
+    It iterates through all OLTs and queues a reachability check for each.
+    """
+    # Calls periodically_check_all_olts_reachability every 5 minutes.
+    sender.add_periodic_task(
+        300.0,  # Run every 300 seconds (5 minutes)
+        # Use the string path to the task to avoid direct import issues before app is fully ready
+        'network.tasks.periodically_check_all_olts_reachability', 
+        name='check all olts reachability every 5 mins', # Optional descriptive name
+    )
+
+    # Add the schedule for periodically_update_all_onts_data if it's not already here
+    sender.add_periodic_task(
+        300.0,
+        'network.tasks.periodically_update_all_onts_data',
+        name='update all onts data every 5 mins',
+    )
+
+    sender.add_periodic_task(30.0, test.s('world'), expires=10)
+
+# Optional: If you want to see what tasks are loaded
+# print(f"Celery tasks: {app.tasks.keys()}")
+@app.task
+def test(arg):
+    print(arg)
 
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
