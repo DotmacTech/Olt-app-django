@@ -15,7 +15,8 @@ def ping_host(host_ip, packets=1, timeout_ms=1000):
             bool: True if the host is reachable, False otherwise.
     """
     system = platform.system().lower()
-    
+    ping_executable = "/usr/bin/ping"
+
     if system == 'windows':
         # For Windows, -n is count, -w is timeout in milliseconds for each reply
         command = f"ping -n {packets} -w {timeout_ms} {host_ip}"
@@ -26,7 +27,7 @@ def ping_host(host_ip, packets=1, timeout_ms=1000):
         # We'll use -W for Linux, and assume a similar behavior or default for others.
         # For simplicity, we'll convert timeout_ms to seconds for -W.
         timeout_sec = max(1, timeout_ms // 1000) # Ensure at least 1 second
-        command = f"ping -c {packets} -W {timeout_sec} {host_ip}"
+        command = f"{ping_executable} -c {packets} -W {timeout_sec} {host_ip}"
 
     try:
         # Execute the command
