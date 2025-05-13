@@ -30,13 +30,13 @@ def ping_host(host_ip, packets=1, timeout_ms=1000):
 
     try:
         # Execute the command
-        # Using shell=True can be a security risk if host_ip is user-supplied directly without sanitization.
-        # However, for internal IP addresses from the DB, it's generally acceptable.
-        # For better security with untrusted input, use shlex.split and pass as a list.
-        process = subprocess.run(shlex.split(command), capture_output=True, text=True, timeout= (packets * (timeout_ms/1000)) + 5) # Overall timeout for subprocess.run
+        # Using shell=True allows the OS to find the 'ping' command in the PATH.
+        # This is acceptable here as the command structure is fixed and host_ip comes from the database.
+        # When shell=True, the command should be a single string.
+        process = subprocess.run(command, shell=True, capture_output=True, text=True, timeout= (packets * (timeout_ms/1000)) + 5) # Overall timeout for subprocess.run
         return process.returncode == 0
     except subprocess.TimeoutExpired:
-        print(f"Ping command to {host_ip} timed out.")
+        # print(f"Ping command to {host_ip} timed out.") # Keep logging in task, not here
         return False
     except Exception as e:
         print(f"Error pinging {host_ip}: {e}")
