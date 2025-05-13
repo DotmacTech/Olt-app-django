@@ -6,7 +6,7 @@ from .models import OLT, Card, PONPort, ONU, ONUType # Ensure OLT is imported
 from .utils.snmp_utils import get_system_metrics # Assuming you might have this
 from .utils.board_utils import get_installed_board_info # SSH based card discovery
 from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async, get_ssh_metrics # Import new ONT fetcher
-
+from .utils.network_utils import ping_host
 @shared_task
 def discover_and_create_cards_task(olt_id):
     try:
