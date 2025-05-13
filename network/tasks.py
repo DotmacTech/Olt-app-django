@@ -241,6 +241,7 @@ def check_olt_reachability_task(olt_id):
         print(f"Checking reachability for OLT: {olt.name} ({olt.ip_address})")
 
         is_reachable = ping_host(olt.ip_address)
+        print(f"[TASK_DEBUG] OLT: {olt.name} ({olt.ip_address}) - ping_host returned: {is_reachable}")
 
         new_status = 'active' if is_reachable else 'inactive'
 

@@ -33,11 +33,18 @@ def ping_host(host_ip, packets=1, timeout_ms=1000):
         # Using shell=True allows the OS to find the 'ping' command in the PATH.
         # This is acceptable here as the command structure is fixed and host_ip comes from the database.
         # When shell=True, the command should be a single string.
-        process = subprocess.run(command, shell=True, capture_output=True, text=True, timeout= (packets * (timeout_ms/1000)) + 5) # Overall timeout for subprocess.run
+        process = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=(packets * (timeout_ms / 1000)) + 5
+        )
+        print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}', RC: {process.returncode}, STDOUT: '{process.stdout.strip()}', STDERR: '{process.stderr.strip()}'")
         return process.returncode == 0
     except subprocess.TimeoutExpired:
-        # print(f"Ping command to {host_ip} timed out.") # Keep logging in task, not here
+        print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}' - Subprocess TIMEOUT")
         return False
     except Exception as e:
-        print(f"Error pinging {host_ip}: {e}")
+        print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}' - Exception: {e}")
         return False
