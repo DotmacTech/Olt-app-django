@@ -1,5 +1,6 @@
 import asyncio
 from django.utils import timezone
+import logging # Import the logging module
 from datetime import timedelta
 
 from rest_framework import viewsets, status, generics, mixins
@@ -29,8 +30,7 @@ from .tasks import (
     check_olt_reachability_task 
 )
 
-
-
+logger = logging.getLogger(__name__) # Get a logger for this module
 
 class OLTViewSet(viewsets.ModelViewSet):
     queryset = OLT.objects.all()
@@ -212,7 +212,12 @@ class OLTViewSet(viewsets.ModelViewSet):
         Triggers a Celery task to refresh system metrics for the OLT.
         """
         olt = self.get_object()
-        update_olt_system_metrics_task.delay(olt.id)
+        logger.info(f"VIEW: Attempting to trigger system metrics refresh for OLT ID {olt.id} ({olt.name}).")
+        try:
+            update_olt_system_metrics_task.delay(olt.id)
+            logger.info(f"VIEW: Successfully called .delay() for update_olt_system_metrics_task for OLT ID {olt.id}.")
+        except Exception as e:
+            logger.error(f"VIEW: Error calling .delay() for update_olt_system_metrics_task for OLT ID {olt.id}: {e}", exc_info=True)
         return Response({"message": "System metrics refresh initiated."}, status=status.HTTP_202_ACCEPTED)
     @action(detail=True, methods=['post'], url_path='check-reachability')
     def check_reachability(self, request, pk=None):
@@ -283,7 +288,6 @@ class ONUViewSet(mixins.ListModelMixin,
         except Exception as e:
             return Response(
                 {"error": f"Failed to initiate ONT details refresh: {str(e)}"},
-                
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 @api_view(['GET'])

@@ -133,3 +133,43 @@ CELERY_TIMEZONE = 'Africa/Lagos' # e.g., 'UTC' or 'Africa/Lagos'
 
 # Celery Beat Settings (if you want to store schedules in the database with django-celery-beat)
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+# Logging Configuration for Development
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,  # Keep Django's default loggers
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'DEBUG',  # Capture DEBUG and higher level messages
+            'class': 'logging.StreamHandler', # Outputs to stderr
+            'formatter': 'verbose', # Use the 'verbose' formatter
+        },
+    },
+    'loggers': {
+        'django': { # Django's own logs
+            'handlers': ['console'],
+            'level': 'INFO', # Or 'DEBUG' for more verbosity from Django
+            'propagate': False, # Don't pass to root logger if handled here
+        },
+        'network': { # Your 'network' app's logs
+            'handlers': ['console'],
+            'level': 'DEBUG', # Capture all DEBUG messages from your app
+            'propagate': True, # You can set to False if you don't want them to go to root
+        },
+        # You can add other app-specific loggers here
+    },
+    'root': { # Catch-all for other logs
+        'handlers': ['console'],
+        'level': 'INFO', # Default level for other logs
+    },
+}
