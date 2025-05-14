@@ -302,5 +302,24 @@ def periodically_check_all_olts_reachability():
     
     print(f"Finished queueing reachability checks for {olts.count()} OLTs.")
 
+@shared_task
+def periodically_update_all_olts_metrics():
+    """
+    Celery task to be run periodically by Celery Beat.
+    It iterates through all OLTs and queues a system metrics update task for each.
+    Only queues for OLTs that are considered 'active' or if you want to try updating
+    metrics regardless of their last known ping status.
+    """
+    print(f"[{timezone.now()}] Starting periodic update for all OLTs system metrics...")
+    # Consider which OLTs to update. For example, only active ones,
+    # or all OLTs to attempt metrics fetching even if they were recently inactive.
+    olts_to_update = OLT.objects.filter(status='active') # Or OLT.objects.all()
+
+    for olt in olts_to_update:
+        print(f"[{timezone.now()}] Queueing system metrics update for OLT: {olt.name} (ID: {olt.id})")
+        update_olt_system_metrics_task.delay(olt.id)
+    
+    print(f"[{timezone.now()}] Finished queueing system metrics updates for {olts_to_update.count()} OLTs.")
 
 # celery -A oltmanager worker -l info -P threads
+# celery -A oltmanager beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler

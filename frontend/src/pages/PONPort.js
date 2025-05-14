@@ -154,7 +154,7 @@ function PONPort() {
         ) : error ? (
           <Alert severity="error">{error}</Alert>
         ) : ponPorts.length === 0 ? (
-          <Alert severity="info">No PON port details found for this slot, or the card does not have 16 ports.</Alert>
+          <Alert severity="info">No PON port details found for this slot.</Alert>
         ) : (
           <TableContainer>
             <Table stickyHeader>

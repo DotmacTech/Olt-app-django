@@ -46,6 +46,13 @@ def setup_periodic_tasks(sender : Celery, **kwargs):
 
     sender.add_periodic_task(30.0, test.s('world'), expires=10)
 
+    # Calls periodically_update_all_olts_metrics every 10 minutes (600 seconds).
+    sender.add_periodic_task(
+        600.0,  # Run every 600 seconds (10 minutes)
+        'network.tasks.periodically_update_all_olts_metrics', 
+        name='update all olts metrics every 10 mins',
+    )
+
 # Optional: If you want to see what tasks are loaded
 # print(f"Celery tasks: {app.tasks.keys()}")
 @app.task

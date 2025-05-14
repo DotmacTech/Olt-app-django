@@ -122,9 +122,9 @@ class OLTViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND
                 )
             # Check if the card is supposed to have a specific number of ports for this operation
-            if target_card.port_count != 16: # Example: only proceed for 16-port cards
+            if target_card.port_count < 1: # Example: only proceed for 16-port cards
                  return Response({
-                     "error": f"The card in slot {slot_number} has {target_card.port_count} ports. This operation is intended for 16-port cards."
+                     "error": f"The card in slot {slot_number} has {target_card.port_count} ports. This operation is intended for cards with at least 1 port."
                  }, status=status.HTTP_400_BAD_REQUEST)
             
             num_pon_ports_on_card = target_card.port_count

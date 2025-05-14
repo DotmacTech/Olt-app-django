@@ -68,8 +68,8 @@ function OLTCards() { // Remove oltId from props
                     <TableCell>{card.port_count}</TableCell>
                     <TableCell>{new Date(card.created_at).toLocaleString()}</TableCell>
                     <TableCell align="center">
-                      {/* Only show button if card has 16 ports, as per backend logic */}
-                      {card.port_count === 16 && (
+                      {/* Show button if card has any ports */}
+                      {card.port_count > 0 && (
                         <IconButton
                           component={RouterLink}
                           to={`/olts/${id}/slot/${card.slot_number}/ponports`}
