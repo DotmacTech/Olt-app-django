@@ -230,3 +230,21 @@ export const getOltAndPonPortInfoForONTList = async (oltId, slotNumber, ponPortI
     throw error;
   }
 };
+
+// --- Dashboard API Calls ---
+
+export const getDashboardSummary = async () => {
+  /**
+   * Fetches summary statistics for the dashboard.
+   */
+  const response = await api.get('/dashboard/summary/');
+  return response.data;
+};
+
+export const getPONOutageList = async () => {
+  /**
+   * Fetches the list of PON outage events.
+   */
+  const response = await api.get('/dashboard/pon-outages/');
+  return response.data;
+};

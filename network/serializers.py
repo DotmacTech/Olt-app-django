@@ -1,8 +1,9 @@
-from rest_framework import serializers
 from .models import (
     OLT, Card, PONPort, UplinkPort, VLAN,
-    ONUType, ONU, Zone, ODB, SpeedProfile
+    ONUType, ONU, Zone, ODB, SpeedProfile,PONOutageEvent
 )
+from rest_framework import serializers
+
 
 class CardSerializer(serializers.ModelSerializer):
     class Meta:
@@ -127,3 +128,13 @@ class SpeedProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = SpeedProfile
         fields = '__all__'
+
+
+class PONOutageEventSerializer(serializers.ModelSerializer):
+    pon_port_name = serializers.CharField(source='pon_port.__str__', read_only=True)
+    olt_name = serializers.CharField(source='pon_port.card.olt.name', read_only=True)
+    slot_port = serializers.CharField(source='pon_port.slot_port_display', read_only=True)
+
+    class Meta:
+        model = PONOutageEvent
+        fields = ['id', 'pon_port', 'pon_port_name', 'olt_name', 'slot_port', 'start_time', 'end_time', 'affected_ont_count', 'possible_cause']

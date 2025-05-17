@@ -1,5 +1,8 @@
 from django.db import models
-
+from django.utils import timezone
+from django.core.exceptions import ValidationError
+from django.utils.translation import gettext_lazy as _
+from django.core.validators import MaxValueValidator, MinValueValidator
 class OLT(models.Model):
     # Basic Information
     name = models.CharField(max_length=100)
@@ -204,3 +207,21 @@ class SpeedProfile(models.Model):
 
     def __str__(self):
         return self.name
+class PONOutageEvent(models.Model):
+    """
+    Records detected PON port outages.
+    """
+    pon_port = models.ForeignKey(PONPort, on_delete=models.CASCADE, related_name='outage_events')
+    start_time = models.DateTimeField(default=timezone.now)
+    end_time = models.DateTimeField(null=True, blank=True)
+    # Store a summary or count of affected ONTs at the time of detection
+    affected_ont_count = models.PositiveIntegerField(default=0)
+    # Store the most common detected cause among affected ONTs
+    possible_cause = models.CharField(max_length=100, null=True, blank=True)
+
+    def __str__(self):
+        status = "Active" if self.end_time is None else f"Ended {self.end_time.strftime('%Y-%m-%d %H:%M')}"
+        return f"Outage on {self.pon_port} ({status})"
+
+    class Meta:
+        ordering = ['-start_time']

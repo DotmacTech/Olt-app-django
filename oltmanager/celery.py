@@ -49,27 +49,22 @@ def setup_periodic_tasks(sender : Celery, **kwargs):
         name='update all onts data every 5 mins',
     )
 
-    # Example test task - using string path
-    sender.add_periodic_task(
-        30.0,
-        'oltmanager.celery.test', # Use the string path to the task
-        kwargs={'arg': 'world'}, # Pass arguments as kwargs
-        name='test task every 30 secs', # Optional descriptive name
-        expires=10
-    )
-
     # Calls periodically_update_all_olts_metrics every 10 minutes (600 seconds).
     sender.add_periodic_task(
         600.0,  # Run every 600 seconds (10 minutes)
         'network.tasks.periodically_update_all_olts_metrics', 
         name='update all olts metrics every 10 mins',
     )
+    
+    # Add the schedule for detect_pon_outages if it's not already here
+    sender.add_periodic_task(
+        300.0,
+        'network.tasks.periodically_detect_pon_outages',
+        name='detect pon outages every 5 mins',
+    )
 
 # Optional: If you want to see what tasks are loaded
 # print(f"Celery tasks: {app.tasks.keys()}")
-@app.task
-def test(arg):
-    print(arg)
 
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):

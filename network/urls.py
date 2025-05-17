@@ -4,7 +4,7 @@ from rest_framework_nested import routers # For nested routers
 from .views import (
     OLTViewSet, CardViewSet, PONPortViewSet, UplinkPortViewSet, VLANViewSet,
     ONUTypeViewSet, ONUViewSet, ZoneViewSet, ODBViewSet, SpeedProfileViewSet,
-    SystemMetricsAPIView,get_olt_pon_port_context_info 
+    SystemMetricsAPIView,get_olt_pon_port_context_info,dashboard_summary_view, pon_outage_list_view
 )
 # from .api.views import OLTViewSet
 from django.urls import path, include
@@ -43,4 +43,6 @@ urlpatterns = [
         get_olt_pon_port_context_info,
         name='olt-ponport-context-info'
     ),
+   path('dashboard/summary/', dashboard_summary_view, name='dashboard-summary'),
+   path('dashboard/pon-outages/', pon_outage_list_view, name='dashboard-pon-outages'),
 ]

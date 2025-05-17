@@ -2,7 +2,7 @@ from celery import shared_task
 from django.utils import timezone
 import asyncio
 
-from .models import OLT, Card, PONPort, ONU, ONUType # Ensure OLT is imported
+from .models import OLT, Card, PONPort, ONU, ONUType, PONOutageEvent # Ensure PONOutageEvent is imported
 from .utils.snmp_utils import get_system_metrics # Assuming you might have this
 from .utils.board_utils import get_installed_board_info # SSH based card discovery
 from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async, get_ssh_metrics # Import new ONT fetcher
@@ -273,18 +273,24 @@ def periodically_update_all_onts_data():
     It iterates through all PON Ports and queues an ONT update task for each.
     """
     print(f"[{timezone.now()}] Starting periodic update for all ONTs data...")
+    
+    base_delay = 0  # Start with no delay for the first task
+    # Adjust this based on how many PON ports you have and typical task duration
+    increment_delay_by = 30  # Stagger subsequent tasks by 30 seconds each 
+
     # We only want to update ONTs for PON ports that belong to active OLTs
     # and have a configured SNMP community string.
     active_pon_ports = PONPort.objects.filter(
         card__olt__status='active', 
         card__olt__snmp_ro_community__isnull=False
     ).exclude(card__olt__snmp_ro_community__exact='')
-
-    for pon_port in active_pon_ports:
-        print(f"[{timezone.now()}] Queueing ONT data update for PON Port ID: {pon_port.id} (OLT: {pon_port.card.olt.name}, Card: {pon_port.card.slot_number}, Port: {pon_port.port_index_on_card})")
-        discover_and_update_onts_for_pon_port_task.delay(pon_port.id)
     
-    print(f"[{timezone.now()}] Finished queueing ONT data updates for {active_pon_ports.count()} PON Ports.")
+    for pon_port in active_pon_ports:
+        print(f"[{timezone.now()}] Queueing ONT data update for PON Port ID: {pon_port.id} (OLT: {pon_port.card.olt.name}, Card: {pon_port.card.slot_number}, Port: {pon_port.port_index_on_card}) with a delay of {base_delay} seconds.")
+        discover_and_update_onts_for_pon_port_task.apply_async(args=[pon_port.id], countdown=base_delay)
+        base_delay += increment_delay_by
+        
+    print(f"[{timezone.now()}] Finished queueing ONT data updates for {active_pon_ports.count()} PON Ports with staggering.")
 
 
 @shared_task
@@ -294,13 +300,19 @@ def periodically_check_all_olts_reachability():
     It iterates through all OLTs and queues a reachability check for each.
     """
     print("Starting periodic check for all OLTs reachability...")
+    
+    base_delay = 0  # Start with no delay for the first task
+    # Adjust this based on how many OLTs you have and typical task duration
+    increment_delay_by = 5  # Stagger subsequent tasks by 5 seconds each
+
     olts = OLT.objects.filter(status__in=['active', 'error', 'unknown', 'inactive']) # Or simply OLT.objects.all() if you want to check all regardless of current status
     
     for olt in olts:
-        print(f"Queueing reachability check for OLT: {olt.name} (ID: {olt.id})")
-        check_olt_reachability_task.delay(olt.id)
-    
-    print(f"Finished queueing reachability checks for {olts.count()} OLTs.")
+        print(f"Queueing reachability check for OLT: {olt.name} (ID: {olt.id}) with a delay of {base_delay} seconds.")
+        check_olt_reachability_task.apply_async(args=[olt.id], countdown=base_delay)
+        base_delay += increment_delay_by
+        
+    print(f"Finished queueing reachability checks for {olts.count()} OLTs with staggering.")
 
 @shared_task
 def periodically_update_all_olts_metrics():
@@ -311,15 +323,112 @@ def periodically_update_all_olts_metrics():
     metrics regardless of their last known ping status.
     """
     print(f"[{timezone.now()}] Starting periodic update for all OLTs system metrics...")
+    
+    base_delay = 0  # Start with no delay for the first task
+    # Adjust this based on how many OLTs you have and typical task duration
+    increment_delay_by = 20 # Stagger subsequent tasks by 10 seconds each (metrics tasks can be longer)
+
     # Consider which OLTs to update. For example, only active ones,
     # or all OLTs to attempt metrics fetching even if they were recently inactive.
     olts_to_update = OLT.objects.filter(status='active') # Or OLT.objects.all()
 
     for olt in olts_to_update:
-        print(f"[{timezone.now()}] Queueing system metrics update for OLT: {olt.name} (ID: {olt.id})")
-        update_olt_system_metrics_task.delay(olt.id)
-    
-    print(f"[{timezone.now()}] Finished queueing system metrics updates for {olts_to_update.count()} OLTs.")
+        print(f"[{timezone.now()}] Queueing system metrics update for OLT: {olt.name} (ID: {olt.id}) with a delay of {base_delay} seconds.")
+        update_olt_system_metrics_task.apply_async(args=[olt.id], countdown=base_delay)
+        base_delay += increment_delay_by
+        
+    print(f"[{timezone.now()}] Finished queueing system metrics updates for {olts_to_update.count()} OLTs with staggering.")
+
+# ... (existing imports and tasks) ...
+
+@shared_task
+def periodically_detect_pon_outages():
+    """
+    Task to detect and record PON port outages based on ONT statuses.
+    """
+    print(f"[{timezone.now()}] Starting PON outage detection (v2 - no overall percentage threshold)...")
+    pon_ports = PONPort.objects.filter(card__olt__status='active') # Only check ports on active OLTs
+
+    # Removed: outage_threshold_percentage
+    recent_offline_window_minutes = 10 # ONTs must have gone offline in the last 10 minutes to be considered "recent"
+    # Removed: recent_offline_significance_threshold
+
+    for pon_port in pon_ports:
+        total_onts = pon_port.onts.count()
+        if total_onts == 0:
+            # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) has no ONTs. Skipping.")
+            continue # Cannot detect outage if no ONTs exist
+
+        offline_onts_qs = pon_port.onts.filter(status='offline')
+        offline_count = offline_onts_qs.count()
+        # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Total ONTs: {total_onts}, Offline ONTs: {offline_count}")
+
+        active_outage = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
+
+        if offline_count > 0:
+            # There are offline ONTs. Check if this is a new/escalating outage.
+            recent_offline_onts_qs = offline_onts_qs.filter(
+                last_down_time__gte=timezone.now() - timezone.timedelta(minutes=recent_offline_window_minutes)
+            )
+            recent_offline_count = recent_offline_onts_qs.count()
+            # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Recently Offline ONTs (last {recent_offline_window_minutes}min): {recent_offline_count}")
+
+            # Condition for a *new* outage:
+            # 1. No active outage already recorded for this port.
+            # 2. Some ONTs went offline recently.
+            # (offline_count > 0 is already established by the outer if condition)
+            if not active_outage and recent_offline_count > 0:
+
+                print(f"[{timezone.now()}] New PON outage detected on {pon_port}. {offline_count}/{total_onts} ONTs offline, {recent_offline_count} of them recently.")
+
+                causes = {}
+                for ont in recent_offline_onts_qs: # Use the queryset for recent offline ONTs
+                    cause = ont.last_down_cause or 'Unknown Cause'
+                    causes[cause] = causes.get(cause, 0) + 1
+                possible_cause = max(causes, key=causes.get) if causes else 'Unknown Cause'
+                # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Determined cause: {possible_cause}")
+
+                PONOutageEvent.objects.create(
+                    pon_port=pon_port,
+                    affected_ont_count=offline_count, # Total offline ONTs on this port
+                    possible_cause=possible_cause
+                )
+            elif active_outage:
+                # An outage is already active. Update its affected_ont_count if it has changed.
+                if active_outage.affected_ont_count != offline_count:
+                    print(f"[{timezone.now()}] Updating affected ONT count for active outage on {pon_port} from {active_outage.affected_ont_count} to {offline_count}.")
+                    active_outage.affected_ont_count = offline_count
+                    # Note: Cause is not re-evaluated here for simplicity, but could be if desired.
+                    active_outage.save(update_fields=['affected_ont_count'])
+                # else:
+                    # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Active outage exists. Offline count ({offline_count}) is the same. No new event trigger.")
+            # else:
+                # Offline ONTs exist, but not enough went down recently to trigger a *new* outage event,
+                # or no active outage exists to update.
+                # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Offline ONTs present ({offline_count}), but recent offline activity ({recent_offline_count}/{offline_count}) doesn't meet threshold for new outage, or no active outage.")
+
+        else: # offline_count == 0
+            # No ONTs are offline on this port.
+            # If there was an active outage, it has now ended.
+            if active_outage:
+                print(f"[{timezone.now()}] PON outage on {pon_port} has ended. All {total_onts} ONTs are online.")
+                active_outage.end_time = timezone.now()
+                active_outage.save(update_fields=['end_time'])
+            # else:
+                # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - All ONTs online. No active outage to end.")
+
+    print(f"[{timezone.now()}] Finished PON outage detection.")
+
+# Add this task to your periodic schedule in admin or settings
+# Example using settings.py:
+# CELERY_BEAT_SCHEDULE = {
+#     # ... other tasks ...
+#     'detect-pon-outages-every-5-minutes': {
+#         'task': 'network.tasks.detect_pon_outages',
+#         'schedule': timedelta(minutes=5),
+#     },
+# }
+
 
 # celery -A oltmanager worker -l info -P threads
 # celery -A oltmanager beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler

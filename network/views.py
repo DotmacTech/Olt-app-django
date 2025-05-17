@@ -1,23 +1,26 @@
 import asyncio
-from django.utils import timezone
 import logging # Import the logging module
 from datetime import timedelta
 
-from rest_framework import viewsets, status, generics, mixins
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.db.models import Count, Q
+
+from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import viewsets, status, generics, mixins
 from rest_framework.decorators import action,api_view, permission_classes # For function-based views
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated # Or AllowAny if no auth yet
 
 
 from .models import (
     OLT, Card, PONPort, UplinkPort, VLAN,
-    ONUType, ONU, Zone, ODB, SpeedProfile
+    ONUType, ONU, Zone, ODB, SpeedProfile,PONOutageEvent
 )
 from .serializers import ( # Import the new serializers
     OLTListSerializer, OLTDetailSerializer, OLTCreateUpdateSerializer, PONPortSerializer,
         CardSerializer, PONPortSerializer, ONUSerializer, UplinkPortSerializer, VLANSerializer,ONUTypeSerializer, ONUSerializer,
-    ZoneSerializer, ODBSerializer, SpeedProfileSerializer
+    ZoneSerializer, ODBSerializer, SpeedProfileSerializer,PONOutageEventSerializer
 )
 from .utils.board_utils import get_installed_board_info # Assuming this is the correct pa
 # from .tasks import update_olt_metrics
@@ -359,3 +362,57 @@ class SystemMetricsAPIView(APIView):
             return Response(metrics)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+def dashboard_summary_view(request):
+    """
+    API endpoint to provide summary statistics for the dashboard.
+    """
+    total_olts = OLT.objects.count()
+    online_olts = OLT.objects.filter(status='active').count()
+
+    total_onts = ONU.objects.count()
+    online_onts = ONU.objects.filter(status='online').count()
+    offline_onts = ONU.objects.filter(status='offline').count()
+
+    # Assuming 'power' and 'los' are possible values for last_down_cause
+    offline_power_onts = ONU.objects.filter(status='offline', last_down_cause__icontains='power').count()
+    offline_los_onts = ONU.objects.filter(status='offline', last_down_cause__icontains='los').count()
+
+    # Get online OLTs with uptime and temperature (assuming these fields are populated by tasks)
+    #online_olts_data = OLT.objects.filter(status='active').values('id', 'name', 'uptime', 'temperature')
+    
+    # Fetch ALL OLTs with their details
+    all_olts_details_list = []
+    for olt in OLT.objects.all().order_by('name'): # Get all OLTs
+        all_olts_details_list.append({
+            'id': olt.id,
+            'name': olt.name,
+            'status': olt.status,  # The raw status value e.g., 'active', 'inactive'
+            'status_display': olt.get_status_display(), # Human-readable e.g., 'Active', 'Inactive'
+            'uptime': olt.uptime, # Assuming this is the string like "Xdays Yhrs..."
+            'temperature': olt.temperature,
+        })
+    summary_data = {
+        'total_olts': total_olts,
+        'online_olts_count': online_olts,
+        'total_onts': total_onts,
+        'online_onts_count': online_onts,
+        'offline_onts_count': offline_onts,
+        'offline_power_onts_count': offline_power_onts,
+        'offline_los_onts_count': offline_los_onts,
+        #'online_olts_details': list(online_olts_data), # Convert queryset to list
+        'all_olts_details': all_olts_details_list,
+    }
+
+    return Response(summary_data)
+
+@api_view(['GET'])
+def pon_outage_list_view(request):
+    """
+    API endpoint to list active and recent PON outage events.
+    """
+    # Get active outages and maybe recent ones (e.g., ended in the last 24 hours)
+    outages = PONOutageEvent.objects.filter(Q(end_time__isnull=True) | Q(end_time__gte=timezone.now() - timezone.timedelta(hours=24))).order_by('-start_time')
+    serializer = PONOutageEventSerializer(outages, many=True)
+    return Response(serializer.data)

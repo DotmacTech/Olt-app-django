@@ -18,6 +18,7 @@ import AddOLT from './pages/AddOLT';
 import PONPort from './pages/PONPort'; 
 import ONTList from './pages/ONTList'; // Import the new ONTList page
 import ONTDetailPage from './pages/ONTDetailPage'; // Import the new ONT Detail page
+import DashboardPage from './pages/DashboardPage'; // Import the new page
 
 const theme = createTheme({
   palette: {
@@ -38,8 +39,9 @@ function App() {
       <Router>
         <Layout>
           <Routes>
-            <Route path="/" element={<Navigate to="/olt-list" replace />} />
-            <Route path="/olt-list" element={<OLTList />} />
+            {/* Change the root path to navigate to the dashboard */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/olt/:id/*" element={<OLTDashboard />}>
               <Route index element={<OLTDetails />} />
               <Route path="cards" element={<OLTCards />} />
@@ -51,7 +53,8 @@ function App() {
               <Route path="voip-profiles" element={<VoIPProfiles />} />
               <Route path="advanced" element={<Advanced />} />
               <Route path="pon-port" element={<PONPort />} />
-            </Route>
+            </Route>            
+            <Route path="/olt-list" element={<OLTList />} /> {/* Keep OLTList route */}
             
             <Route path="/olt/add" element={<AddOLT />} />
             {/* Route for specific PON Port details page */}
