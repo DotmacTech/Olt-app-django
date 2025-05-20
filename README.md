@@ -34,25 +34,19 @@ pip install -r requirements.txt
   ```bash
   sudo apt install postgresql postgresql-contrib
   ```
-- Create database and user (replace `olt_db`, `olt_user`, `your_password` as needed):
+- Create database and user:
   ```bash
   sudo -u postgres psql
   CREATE DATABASE oltmanager;
-  CREATE USER dotmacuser WITH PASSWORD 'dotmac@1;
-  ALTER ROLE dotmacuser SET client_encoding TO 'utf8';
-  ALTER ROLE dotmacuser SET default_transaction_isolation TO 'read committed';
-  ALTER ROLE dotmacuser SET timezone TO 'UTC';
-  GRANT ALL PRIVILEGES ON DATABASE oltmanager TO dotmacuser;
-  GRANT ALL PRIVILEGES ON SCHEMA public TO dotmacuser;
-  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dotmacuser;
-  GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO dotmacuser;
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO dotmacuser;
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO dotmacuser;
-  GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO dotmacuser;
-  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO dotmacuser;
+  CREATE USER dotmacuser WITH PASSWORD 'dotmac@1';
+  ALTER DATABASE oltmanager OWNER TO dotmacuser;
+  \c oltmanager dotmacuser;
+  GRANT ALL ON SCHEMA public TO dotmacuser;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO dotmacuser;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO dotmacuser;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO dotmacuser;
   \q
   ```
-
 ## 6. Configure Django Settings
 
 - Copy and edit your environment variables or `settings.py` as needed (database, secret key, etc.).
