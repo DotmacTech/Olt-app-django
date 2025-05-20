@@ -52,9 +52,9 @@ def broadcast_pon_port_update(data):
         }
     )
 
-@receiver(post_save, sender=PONPort)
-@receiver(post_delete, sender=PONPort)
-def handle_pon_port_change(sender, instance, **kwargs):
-    # Prepare the data to send (customize as needed)
-    pon_ports = list(PONPort.objects.filter(olt=instance.olt, slot=instance.slot).values())
-    broadcast_pon_port_update({"pon_ports": pon_ports})
+# @receiver(post_save, sender=PONPort)
+# @receiver(post_delete, sender=PONPort)
+# def handle_pon_port_change(sender, instance, **kwargs):
+#     # Prepare the data to send (customize as needed)
+#     pon_ports = list(PONPort.objects.filter(olt=instance.olt, slot=instance.slot).values())
+#     broadcast_pon_port_update({"pon_ports": pon_ports})

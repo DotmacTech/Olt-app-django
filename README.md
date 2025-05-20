@@ -215,7 +215,11 @@ uvicorn oltmanager.asgi:application --host 0.0.0.0 --port 8000 --reload
 - Ensure Redis and RabbitMQ are running.
 
 # Frontend
-
+creata .env file in frontend folder
+```bash
+REACT_APP_API_BASE_URL=http://10.120.120.38:8000/api
+REACT_APP_WS_BACKEND_HOST=10.120.120.38:8000
+```
 ```bash
 cd frontend
 ```
