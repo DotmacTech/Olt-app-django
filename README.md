@@ -44,7 +44,6 @@ pip install -r requirements.txt
   ALTER ROLE dotmacuser SET timezone TO 'UTC';
   GRANT ALL PRIVILEGES ON DATABASE oltmanager TO dotmacuser;
   GRANT ALL PRIVILEGES ON SCHEMA public TO dotmacuser;
-  GRANT USAGE ON SCHEMA public TO dotmacuser;
   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dotmacuser;
   GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO dotmacuser;
   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO dotmacuser;
