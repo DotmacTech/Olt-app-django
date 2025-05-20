@@ -43,6 +43,7 @@ pip install -r requirements.txt
   ALTER ROLE dotmacuser SET default_transaction_isolation TO 'read committed';
   ALTER ROLE dotmacuser SET timezone TO 'UTC';
   GRANT ALL PRIVILEGES ON DATABASE oltmanager TO dotmacuser;
+  GRANT ALL PRIVILEGES ON SCHEMA public TO dotmacuser;
   \q
   ```
 
