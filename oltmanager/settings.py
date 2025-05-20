@@ -24,9 +24,10 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'django_celery_beat',
+    'channels',
     'corsheaders',
     'network',
-    'django_celery_beat',
 ]
 
 MIDDLEWARE = [
@@ -59,6 +60,9 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'oltmanager.wsgi.application'
+
+ASGI_APPLICATION = 'oltmanager.asgi.application'
+
 
 # Database
 # DATABASES = {
@@ -107,7 +111,9 @@ USE_I18N = True
 USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+
+STATIC_ROOT = '/home/devserver/Olt-app-django/static/'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -171,5 +177,16 @@ LOGGING = {
     'root': { # Catch-all for other logs
         'handlers': ['console'],
         'level': 'INFO', # Default level for other logs
+    },
+}
+
+
+# Configure channel layers (using Redis as an example)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [('localhost', 6379)], # Adjust if your Redis is elsewhere
+        },
     },
 }

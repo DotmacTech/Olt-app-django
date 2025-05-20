@@ -413,6 +413,6 @@ def pon_outage_list_view(request):
     API endpoint to list active and recent PON outage events.
     """
     # Get active outages and maybe recent ones (e.g., ended in the last 24 hours)
-    outages = PONOutageEvent.objects.filter(Q(end_time__isnull=True) | Q(end_time__gte=timezone.now() - timezone.timedelta(hours=24))).order_by('-start_time')
+    outages = PONOutageEvent.objects.filter(Q(end_time__isnull=True) | Q(end_time__gte=timezone.now() - timezone.timedelta(minutes=5))).order_by('-start_time')
     serializer = PONOutageEventSerializer(outages, many=True)
     return Response(serializer.data)

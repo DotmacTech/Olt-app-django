@@ -1,56 +1,95 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
   Paper,
-CircularProgress,
-  Alert,
-  Grid,
-  Card, // Use Card for summary boxes
-  CardContent,
-  Table, // For the outage table
+  Table, 
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Divider,
-  Chip, // Import Chip for status display
+  CircularProgress,
+  Alert,
+  Grid,
+  Card,
+  CardContent,
+  Chip
 } from '@mui/material';
-import { getDashboardSummary, getPONOutageList } from '../services/api';
-import { formatDistanceToNow } from 'date-fns'; // You might need to install date-fns: npm install date-fns
+import { formatDistanceToNow } from 'date-fns'; 
 
 function DashboardPage() {
+  // ... existing state declarations ...
   const [summaryData, setSummaryData] = useState(null);
   const [outageData, setOutageData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const fetchDashboardData = useCallback(async () => {
+  // WebSocket ref (to persist between renders)
+  const wsRef = React.useRef(null);
+
+  // WebSocket-only: No REST API or polling, just connect WebSocket and handle all data
+  useEffect(() => {
     setLoading(true);
     setError(null);
-    try {
-      const summary = await getDashboardSummary();
-      setSummaryData(summary);
-      const outages = await getPONOutageList();
-      setOutageData(outages);
-    } catch (err) {
-      console.error('DashboardPage: Error fetching dashboard data:', err);
-      setError(err.response?.data?.detail || err.message || 'Failed to fetch dashboard data.');
-    } finally {
-      setLoading(false);
+    // Dynamically build ws:// or wss:// based on the current protocol
+    let wsUrl;
+    const backendHost = process.env.REACT_APP_WS_BACKEND_HOST;
+    console.log('REACT_APP_WS_BACKEND_HOST:', backendHost);
+    if (backendHost) {
+      wsUrl = `ws://${backendHost}/ws/pon_outages/`;
+    } else if (window.location.hostname === 'localhost' && window.location.port === '3000') {
+      // If running in React dev server, connect to Django backend on 8000
+      wsUrl = 'ws://localhost:8000/ws/pon_outages/';
+    } else {
+      const loc = window.location;
+      const wsProtocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+      wsUrl = `${wsProtocol}//${loc.hostname}:${loc.port ? loc.port : (loc.protocol === 'https:' ? '443' : '80')}/ws/pon_outages/`;
     }
+    const ws = new window.WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setLoading(false);
+      // Optionally: console.log('WebSocket connected');
+    };
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (!msg || !msg.type) return;
+        if (msg.type === 'dashboard_summary') {
+          setSummaryData(msg.data);
+        } else if (['new_outage','updated_outage','resolved_outage'].includes(msg.type)) {
+          setOutageData((prev) => {
+            if (!msg.data) return prev;
+            switch (msg.type) {
+              case 'new_outage':
+                return [msg.data, ...prev];
+              case 'updated_outage':
+                return prev.map((item) => item.id === msg.data.id ? msg.data : item);
+              case 'resolved_outage':
+                return prev.filter((item) => item.id !== msg.data.id);
+              default:
+                return prev;
+            }
+          });
+        }
+      } catch (e) {
+        setError('WebSocket message parse error');
+      }
+    };
+    ws.onerror = (e) => {
+      setError('WebSocket error');
+    };
+    ws.onclose = () => {
+      // Optionally: console.log('WebSocket disconnected');
+    };
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
   }, []);
-
-  useEffect(() => {
-    fetchDashboardData();
-
-    // Set up polling for near real-time updates (e.g., every 30 seconds)
-    const pollingInterval = setInterval(fetchDashboardData, 30000); // Poll every 30 seconds
-
-    // Clean up the interval when the component unmounts
-    return () => clearInterval(pollingInterval);
-  }, [fetchDashboardData]);
 
   const getOltStatusChip = (statusValue, statusDisplay) => {
     if (statusValue?.toLowerCase() === "active") {

@@ -7,6 +7,12 @@ from .utils.snmp_utils import get_system_metrics # Assuming you might have this
 from .utils.board_utils import get_installed_board_info # SSH based card discovery
 from .utils.snmp_utils import get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async, get_ssh_metrics # Import new ONT fetcher
 from .utils.network_utils import ping_host
+
+# Placeholder for WebSocket notification - we'll define this structure later
+from .consumers import send_pon_outage_notification # Assuming it will be in consumers.py
+from .serializers import PONOutageEventSerializer # Assuming you have/will create this
+
+
 @shared_task
 def discover_and_create_cards_task(olt_id):
     try:
@@ -42,7 +48,7 @@ def discover_and_create_cards_task(olt_id):
                 # If the card has ports and is likely a PON card, trigger PON port discovery
                 # Adjust condition based on how you identify PON cards (e.g., card_type name)
                 if card.port_count > 0: # Basic check
-                    discover_and_create_pon_ports_task.delay(card.id)
+                    discover_and_create_pon_ports_task.apply_async(args=(card.id,), queue='receive_periodic')
             print(f"Card discovery completed for OLT: {olt.name}")
         else:
             error_message = board_info_result.get('error', 'Unknown error during card discovery')
@@ -287,7 +293,7 @@ def periodically_update_all_onts_data():
     
     for pon_port in active_pon_ports:
         print(f"[{timezone.now()}] Queueing ONT data update for PON Port ID: {pon_port.id} (OLT: {pon_port.card.olt.name}, Card: {pon_port.card.slot_number}, Port: {pon_port.port_index_on_card}) with a delay of {base_delay} seconds.")
-        discover_and_update_onts_for_pon_port_task.apply_async(args=[pon_port.id], countdown=base_delay)
+        discover_and_update_onts_for_pon_port_task.apply_async(queue='receive_periodic', args=[pon_port.id], countdown=base_delay)
         base_delay += increment_delay_by
         
     print(f"[{timezone.now()}] Finished queueing ONT data updates for {active_pon_ports.count()} PON Ports with staggering.")
@@ -309,7 +315,7 @@ def periodically_check_all_olts_reachability():
     
     for olt in olts:
         print(f"Queueing reachability check for OLT: {olt.name} (ID: {olt.id}) with a delay of {base_delay} seconds.")
-        check_olt_reachability_task.apply_async(args=[olt.id], countdown=base_delay)
+        check_olt_reachability_task.apply_async(queue='receive_periodic', args=[olt.id], countdown=base_delay)
         base_delay += increment_delay_by
         
     print(f"Finished queueing reachability checks for {olts.count()} OLTs with staggering.")
@@ -334,14 +340,10 @@ def periodically_update_all_olts_metrics():
 
     for olt in olts_to_update:
         print(f"[{timezone.now()}] Queueing system metrics update for OLT: {olt.name} (ID: {olt.id}) with a delay of {base_delay} seconds.")
-        update_olt_system_metrics_task.apply_async(args=[olt.id], countdown=base_delay)
+        update_olt_system_metrics_task.apply_async(queue='receive_periodic', args=[olt.id], countdown=base_delay)
         base_delay += increment_delay_by
         
     print(f"[{timezone.now()}] Finished queueing system metrics updates for {olts_to_update.count()} OLTs with staggering.")
-
-# ... (existing imports and tasks) ...
-
-@shared_task
 def periodically_detect_pon_outages():
     """
     Task to detect and record PON port outages based on ONT statuses.
@@ -349,21 +351,74 @@ def periodically_detect_pon_outages():
     print(f"[{timezone.now()}] Starting PON outage detection (v2 - no overall percentage threshold)...")
     pon_ports = PONPort.objects.filter(card__olt__status='active') # Only check ports on active OLTs
 
-    # Removed: outage_threshold_percentage
-    recent_offline_window_minutes = 10 # ONTs must have gone offline in the last 10 minutes to be considered "recent"
-    # Removed: recent_offline_significance_threshold
-
+    # Outage detection is now based on PON port status, not recent offline ONTs
     for pon_port in pon_ports:
         total_onts = pon_port.onts.count()
         if total_onts == 0:
-            # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) has no ONTs. Skipping.")
             continue # Cannot detect outage if no ONTs exist
+
+        # If the PON port itself is down, trigger outage logic
+        if pon_port.status == 'down':
+            offline_onts_qs = pon_port.onts.filter(status='offline')
+            offline_count = offline_onts_qs.count()
+            active_outage_event = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
+
+            if offline_count > 0:
+                if not active_outage_event:
+                    print(f"[{timezone.now()}] New PON outage detected on {pon_port}. {offline_count}/{total_onts} ONTs offline (PON port is DOWN).")
+                    causes = {}
+                    for ont in offline_onts_qs:
+                        cause = ont.last_down_cause or 'Unknown Cause'
+                        causes[cause] = causes.get(cause, 0) + 1
+                    possible_cause = max(causes, key=causes.get) if causes else 'Unknown Cause'
+                    new_outage = PONOutageEvent.objects.create(
+                        pon_port=pon_port,
+                        affected_ont_count=total_onts,
+                        possible_cause=possible_cause
+                    )
+                    print(f"[{timezone.now()}] Saved new outage for {pon_port} affecting {total_onts} ONTs.")
+                    serializer = PONOutageEventSerializer(new_outage)
+                    send_pon_outage_notification('new_outage', serializer.data)
+                elif active_outage_event.affected_ont_count != total_onts:
+                    print(f"[{timezone.now()}] Updating affected ONT count for active outage on {pon_port} from {active_outage_event.affected_ont_count} to {total_onts}.")
+                    active_outage_event.affected_ont_count = total_onts
+                    active_outage_event.save(update_fields=['affected_ont_count'])
+                    serializer = PONOutageEventSerializer(active_outage_event)
+                    send_pon_outage_notification('updated_outage', serializer.data)
+            else:
+                # If no ONTs are offline but port is down, still consider this an outage
+                if not active_outage_event:
+                    print(f"[{timezone.now()}] New PON outage detected on {pon_port}. Port is DOWN but no ONTs are marked offline.")
+                    new_outage = PONOutageEvent.objects.create(
+                        pon_port=pon_port,
+                        affected_ont_count=0,
+                        possible_cause='PON port down (no ONTs offline)'
+                    )
+                    serializer = PONOutageEventSerializer(new_outage)
+                    send_pon_outage_notification('new_outage', serializer.data)
+                elif active_outage_event.affected_ont_count != 0:
+                    active_outage_event.affected_ont_count = 0
+                    active_outage_event.save(update_fields=['affected_ont_count'])
+                    serializer = PONOutageEventSerializer(active_outage_event)
+                    send_pon_outage_notification('updated_outage', serializer.data)
+            continue
+        # If port is up, use the old logic to resolve outages if all ONTs are online
+        offline_onts_qs = pon_port.onts.filter(status='offline')
+        offline_count = offline_onts_qs.count()
+        active_outage_event = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
+        if offline_count == 0 and active_outage_event:
+            print(f"[{timezone.now()}] PON outage on {pon_port} has ended. All {total_onts} ONTs are online.")
+            active_outage_event.end_time = timezone.now()
+            active_outage_event.save(update_fields=['end_time'])
+            serializer = PONOutageEventSerializer(active_outage_event)
+            send_pon_outage_notification('resolved_outage', serializer.data)
+            print(f"[{timezone.now()}] Finished PON outage detection.")
 
         offline_onts_qs = pon_port.onts.filter(status='offline')
         offline_count = offline_onts_qs.count()
         # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Total ONTs: {total_onts}, Offline ONTs: {offline_count}")
 
-        active_outage = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
+        active_outage_event = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
 
         if offline_count > 0:
             # There are offline ONTs. Check if this is a new/escalating outage.
@@ -372,13 +427,13 @@ def periodically_detect_pon_outages():
             )
             recent_offline_count = recent_offline_onts_qs.count()
             # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Recently Offline ONTs (last {recent_offline_window_minutes}min): {recent_offline_count}")
+            # print(f"DEBUG: PON Port {pon_port} - Recently Offline ONTs (last {recent_offline_window_minutes}min): {recent_offline_count}")
 
             # Condition for a *new* outage:
             # 1. No active outage already recorded for this port.
             # 2. Some ONTs went offline recently.
             # (offline_count > 0 is already established by the outer if condition)
             if not active_outage and recent_offline_count > 0:
-
                 print(f"[{timezone.now()}] New PON outage detected on {pon_port}. {offline_count}/{total_onts} ONTs offline, {recent_offline_count} of them recently.")
 
                 causes = {}
@@ -388,36 +443,51 @@ def periodically_detect_pon_outages():
                 possible_cause = max(causes, key=causes.get) if causes else 'Unknown Cause'
                 # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Determined cause: {possible_cause}")
 
-                PONOutageEvent.objects.create(
+                new_outage = PONOutageEvent.objects.create(
                     pon_port=pon_port,
-                    affected_ont_count=offline_count, # Total offline ONTs on this port
+                    affected_ont_count=total_onts, # Now, it's the total ONTs on the port
                     possible_cause=possible_cause
                 )
-            elif active_outage:
+
+                print(f"[{timezone.now()}] Saved new outage for {pon_port} affecting {total_onts} ONTs.")
+                # Send WebSocket notification for new outage
+                serializer = PONOutageEventSerializer(new_outage)
+                send_pon_outage_notification('new_outage', serializer.data)
+
+            elif active_outage_event:
                 # An outage is already active. Update its affected_ont_count if it has changed.
-                if active_outage.affected_ont_count != offline_count:
-                    print(f"[{timezone.now()}] Updating affected ONT count for active outage on {pon_port} from {active_outage.affected_ont_count} to {offline_count}.")
-                    active_outage.affected_ont_count = offline_count
+                # The number of *affected* ONTs is the total ONTs on the port.
+                if active_outage_event.affected_ont_count != total_onts:
+                    print(f"[{timezone.now()}] Updating affected ONT count for active outage on {pon_port} from {active_outage_event.affected_ont_count} to {total_onts}.")
+                    active_outage_event.affected_ont_count = total_onts
                     # Note: Cause is not re-evaluated here for simplicity, but could be if desired.
-                    active_outage.save(update_fields=['affected_ont_count'])
+                    active_outage_event.save(update_fields=['affected_ont_count'])
+                    # Send WebSocket notification for updated outage
+                    serializer = PONOutageEventSerializer(active_outage_event)
+                    send_pon_outage_notification('updated_outage', serializer.data)
                 # else:
                     # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Active outage exists. Offline count ({offline_count}) is the same. No new event trigger.")
+                    # print(f"DEBUG: PON Port {pon_port} - Active outage exists. Affected ONT count ({total_onts}) is the same. No new event trigger.")
             # else:
                 # Offline ONTs exist, but not enough went down recently to trigger a *new* outage event,
                 # or no active outage exists to update.
-                # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - Offline ONTs present ({offline_count}), but recent offline activity ({recent_offline_count}/{offline_count}) doesn't meet threshold for new outage, or no active outage.")
+                # print(f"DEBUG: PON Port {pon_port} - Offline ONTs present ({offline_count}), but recent offline activity ({recent_offline_count}) doesn't meet threshold for new outage, or no active outage.")
 
         else: # offline_count == 0
             # No ONTs are offline on this port.
             # If there was an active outage, it has now ended.
-            if active_outage:
+            if active_outage_event:
                 print(f"[{timezone.now()}] PON outage on {pon_port} has ended. All {total_onts} ONTs are online.")
-                active_outage.end_time = timezone.now()
-                active_outage.save(update_fields=['end_time'])
+                active_outage_event.end_time = timezone.now()
+                active_outage_event.save(update_fields=['end_time'])
+                # Send WebSocket notification for resolved outage
+                serializer = PONOutageEventSerializer(active_outage_event)
+                send_pon_outage_notification('resolved_outage', serializer.data)
             # else:
-                # print(f"DEBUG: PON Port {pon_port.id} ({pon_port}) - All ONTs online. No active outage to end.")
+                # print(f"DEBUG: PON Port {pon_port} - All ONTs online. No active outage to end.")
 
     print(f"[{timezone.now()}] Finished PON outage detection.")
+
 
 # Add this task to your periodic schedule in admin or settings
 # Example using settings.py:

@@ -22,7 +22,7 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Define Celery queues
 app.conf.task_routes = {
     'network.tasks.periodically_*': {'queue': 'periodic'},  # Tasks starting with "periodically_" go to "periodic" queue
-    'network.tasks.*': {'queue': 'default'}, # Other network tasks go to "default" queue
+    'network.tasks.*': {'queue': 'default'}, # All other network tasks go to the default queue
 }
 
 # Load task modules from all registered Django app configs.
