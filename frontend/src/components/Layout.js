@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, AppBar, Toolbar, Typography, Button } from '@mui/material';
+import { Box, AppBar, Toolbar, Typography, Button, Menu, MenuItem } from '@mui/material';
 import { Link, useLocation } from 'react-router-dom';
 
 const navItems = [
@@ -15,6 +15,15 @@ const navItems = [
 ];
 
 function Layout({ children }) {
+  const [settingsAnchorEl, setSettingsAnchorEl] = React.useState(null);
+  const open = Boolean(settingsAnchorEl);
+  const handleSettingsClick = (event) => {
+    setSettingsAnchorEl(event.currentTarget);
+  };
+  const handleSettingsClose = () => {
+    setSettingsAnchorEl(null);
+  };
+
   const location = useLocation();
 
   return (
@@ -22,7 +31,9 @@ function Layout({ children }) {
       <AppBar position="static" color="primary">
         <Toolbar>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-          Dotmac Network Management
+            <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }}>
+              Dotmac Network Management
+            </Link>
           </Typography>
           <Button color="inherit">User Training</Button>
           <Button color="inherit">Configure</Button>
@@ -30,7 +41,34 @@ function Layout({ children }) {
           <Button color="inherit">Diagnostics</Button>
           <Button color="inherit">Reports</Button>
           <Button color="inherit">Save Config</Button>
-          <Button color="inherit">Settings</Button>
+          {/* Settings Dropdown */}
+          <Button
+            color="inherit"
+            id="settings-button"
+            aria-controls={open ? 'settings-menu' : undefined}
+            aria-haspopup="true"
+            aria-expanded={open ? 'true' : undefined}
+            onClick={handleSettingsClick}
+          >
+            Settings
+          </Button>
+          <Menu
+            id="settings-menu"
+            anchorEl={settingsAnchorEl}
+            open={open}
+            onClose={handleSettingsClose}
+            MenuListProps={{ 'aria-labelledby': 'settings-button' }}
+          >
+            <MenuItem component={Link} to="/olt-list" onClick={handleSettingsClose}>
+              OLTs
+            </MenuItem>
+            <MenuItem component={Link} to="/onu-types" onClick={handleSettingsClose}>
+              ONU Types
+            </MenuItem>
+            <MenuItem component={Link} to="/zones" onClick={handleSettingsClose}>
+              Zones
+            </MenuItem>
+          </Menu>
           <Button color="inherit">Logout</Button>
         </Toolbar>
       </AppBar>

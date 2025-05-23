@@ -106,7 +106,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Africa/Lagos'
 USE_I18N = True
 USE_TZ = True
 
@@ -147,7 +147,37 @@ CELERY_TIMEZONE = 'Africa/Lagos' # e.g., 'UTC' or 'Africa/Lagos'
 
 # Celery Beat Settings (if you want to store schedules in the database with django-celery-beat)
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
-
+CELERY_BEAT_SCHEDULE = {
+    'update-onts-every-hour': {
+        'task': 'network.tasks.update_all_onts_task',
+        'schedule': 3600.0,  # Run every hour
+    },
+    'periodically-update-onts': {
+        'task': 'network.tasks.periodically_update_all_onts_data',
+        'schedule': 30.0,  # Run every 30 seconds
+        'options': {
+            'expires': 25.0,  # Task expires after 25 seconds
+            'time_limit': 25,  # Hard time limit of 25 seconds
+        },
+    },
+    # Add more tasks as needed
+    'update-olt-metrics-every-hour': {
+        'task': 'network.tasks.update_olt_system_metrics_task',
+        'schedule': 3600.0,  # Run every hour
+    },
+    'update-olt-reachability-every-hour': {
+        'task': 'network.tasks.check_olt_reachability_task',
+        'schedule': 3600.0,  # Run every hour
+    },
+    'update-onts-metrics-every-hour': {
+        'task': 'network.tasks.update_onts_metrics_task',
+        'schedule': 3600.0,  # Run every hour
+    },
+    'update-olt-reachability-every-hour': {
+        'task': 'network.tasks.check_olt_reachability_task',
+        'schedule': 3600.0,  # Run every hour
+    },
+}
 # Logging Configuration for Development
 LOGGING = {
     'version': 1,

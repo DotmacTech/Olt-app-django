@@ -231,6 +231,190 @@ export const getOltAndPonPortInfoForONTList = async (oltId, slotNumber, ponPortI
   }
 };
 
+// --- Add ONT Support API Calls ---
+
+// Fetch all ONTs in the database
+export const getAllOnts = async () => {
+  try {
+    const response = await api.get('/onts/');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching all ONTs:', error.response || error.message);
+    throw error;
+  }
+};
+
+
+// Get Zones with pagination
+export const getZones = async (page = 1, pageSize = 10) => {
+  try {
+    const response = await api.get('/zones/', {
+      params: {
+        page,
+        page_size: pageSize
+      }
+    });
+    return {
+      zones: response.data.results || response.data, // Handle both paginated and non-paginated responses
+      total: response.data.count || (response.data.length || 0),
+      page: response.data.page || page,
+      pageSize: response.data.page_size || pageSize
+    };
+  } catch (error) {
+    console.error('Error fetching Zones:', error);
+    throw error;
+  }
+};
+
+// Get all ODBs (Splitters)
+export const getOdbs = async () => {
+  try {
+    const response = await api.get('/odbs/');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching ODBs:', error);
+    throw error;
+  }
+};
+
+// Get all ONU Types
+export const getOnuTypes = async (page = 1, limit = 10) => {
+  try {
+    let url = `/onu-types/?limit=${limit}`;
+    if (page > 1) {
+      url += `&page=${page}`;
+    }
+    const response = await api.get(url);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching ONU Types:', error);
+    throw error;
+  }
+};
+
+// Get single ONU Type by ID
+export const getOnuTypeById = async (id) => {
+  try {
+    const response = await api.get(`/onu-types/${id}/`);
+    return response.data;
+  } catch (error) {
+    console.error(`Error fetching ONU Type with ID ${id}:`, error);
+    throw error;
+  }
+};
+
+// Delete an ONU Type
+export const deleteOnuType = async (onuTypeId) => {
+  try {
+    await api.delete(`/onu-types/${onuTypeId}/`);
+  } catch (error) {
+    console.error('Error deleting ONU Type:', error);
+    throw error;
+  }
+};
+
+// Update an existing ONU Type (multipart/form-data)
+export const updateOnuType = async (id, formData) => {
+  try {
+    const response = await api.put(
+      `/onu-types/${id}/`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('Error updating ONU Type:', error);
+    throw error;
+  }
+};
+
+// Create a new ONU Type (multipart/form-data)
+export const createOnuType = async (formData) => {
+  try {
+    const response = await api.post(
+      '/onu-types/',
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('Error creating ONU Type:', error);
+    throw error;
+  }
+};
+
+// Create a new ONU
+export const createOnu = async (data) => {
+  try {
+    if (!data.pon_port) throw new Error('pon_port is required');
+    const response = await api.post(`/api/pon-ports/${data.pon_port}/onts/`, data);
+    return response.data;
+  } catch (error) {
+    console.error('Error creating ONU:', error);
+    throw error;
+  }
+};
+
+// --- Zone Management ---
+
+export const getZone = async (id) => {
+  try {
+    const response = await api.get(`/zones/${id}/`);
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching zone:', error);
+    throw error;
+  }
+};
+
+export const createZone = async (data) => {
+  try {
+    console.log('Creating zone with data:', data);
+    const response = await api.post('/zones/', data);
+    console.log('Zone created successfully:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('Error creating zone:', error);
+    if (error.response) {
+      console.error('Response data:', error.response.data);
+      console.error('Response status:', error.response.status);
+      console.error('Response headers:', error.response.headers);
+    } else if (error.request) {
+      console.error('No response received:', error.request);
+    } else {
+      console.error('Error message:', error.message);
+    }
+    throw error;
+  }
+};
+
+export const updateZone = async (id, data) => {
+  try {
+    const response = await api.patch(`/zones/${id}/`, data);
+    return response.data;
+  } catch (error) {
+    console.error('Error updating zone:', error);
+    throw error;
+  }
+};
+
+export const deleteZone = async (id) => {
+  try {
+    await api.delete(`/zones/${id}/`);
+  } catch (error) {
+    console.error('Error deleting zone:', error);
+    throw error;
+  }
+};
+
 // --- Dashboard API Calls ---
 
 export const getDashboardSummary = async () => {
@@ -247,4 +431,32 @@ export const getPONOutageList = async () => {
    */
   const response = await api.get('/dashboard/pon-outages/');
   return response.data;
+};
+
+/**
+ * Triggers a refresh of all ONTs across all PON ports
+ * @returns {Promise<Object>} Response data with status and task ID
+ */
+export const refreshAllOnts = async () => {
+  try {
+    const response = await api.get('/onts/refresh/');
+    return response.data;
+  } catch (error) {
+    console.error('Error refreshing all ONTs:', error.response || error.message);
+    throw error;
+  }
+};
+
+/**
+ * Triggers a refresh of all OLTs' reachability status
+ * @returns {Promise<Object>} Response data with status and task ID
+ */
+export const refreshAllOlts = async () => {
+  try {
+    const response = await api.post('/olts/refresh/');
+    return response.data;
+  } catch (error) {
+    console.error('Error refreshing all OLTs:', error.response || error.message);
+    throw error;
+  }
 };

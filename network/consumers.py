@@ -4,6 +4,9 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 
+import logging
+logger = logging.getLogger(__name__)
+
 # Utility function to broadcast dashboard summary to all clients
 def broadcast_dashboard_summary():
     from network.models import OLT, ONU
@@ -37,13 +40,20 @@ def broadcast_dashboard_summary():
             'offline_los_onts_count': offline_los_onts,
             'all_olts_details': all_olts_details_list,
         }
-        async_to_sync(channel_layer.group_send)(
-            'pon_outages_group',
-            {
-                'type': 'dashboard.summary',
-                'data': summary_data
-            }
-        )
+        logger.info(f"BROADCAST_DASHBOARD_SUMMARY: Preparing to send summary. Total OLTs: {summary_data.get('total_olts')}, Details count: {len(summary_data.get('all_olts_details', []))}")
+        try:
+            async_to_sync(channel_layer.group_send)(
+                'pon_outages_group',
+                {
+                    'type': 'dashboard_summary',  # Use underscore to match frontend expectation
+                    'data': summary_data
+                }
+            )
+            logger.info("BROADCAST_DASHBOARD_SUMMARY: Successfully sent to group pon_outages_group.")
+        except Exception as e:
+            logger.error(f"BROADCAST_DASHBOARD_SUMMARY: Error sending to group: {e}", exc_info=True)
+    else:
+        logger.warning("BROADCAST_DASHBOARD_SUMMARY: Channel layer is None. Cannot broadcast.")
 
 class PONOutageConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -55,7 +65,7 @@ class PONOutageConsumer(AsyncWebsocketConsumer):
             self.channel_name
         )
         await self.accept()
-        print(f"WebSocket connected: {self.channel_name}, joined group: {self.group_name}")
+        logger.info(f"WebSocket connected: {self.channel_name}, joined group: {self.group_name}")
 
         # --- Send dashboard summary on connect ---
         # Import models here to avoid circular imports
@@ -88,15 +98,19 @@ class PONOutageConsumer(AsyncWebsocketConsumer):
                 'offline_los_onts_count': offline_los_onts,
                 'all_olts_details': all_olts_details_list,
             }
+            logger.info(f"PONOutageConsumer.connect: Sending initial dashboard summary. Total OLTs: {summary_data.get('total_olts')}, Details count: {len(summary_data.get('all_olts_details', []))}")
             await self.send(text_data=json.dumps({
                 'type': 'dashboard_summary',
                 'data': summary_data
             }))
         except Exception as e:
+            logger.error(f"PONOutageConsumer.connect: Error sending initial dashboard summary: {e}", exc_info=True)
             await self.send(text_data=json.dumps({
                 'type': 'dashboard_summary',
+                'data': None,
                 'error': str(e)
             }))
+            
 
     # Helper async methods for ORM compatibility
     @database_sync_to_async
@@ -108,15 +122,16 @@ class PONOutageConsumer(AsyncWebsocketConsumer):
         return list(OLT.objects.all().order_by('name'))
 
     async def dashboard_summary(self, event):
-        # Handler for group_send with type 'dashboard.summary'
+        # Handler for group_send with type 'dashboard_summary' (underscore, to match frontend)
         summary_data = event.get('data', {})
+        logger.info(f"PONOutageConsumer.dashboard_summary: Received event. Total OLTs in event data: {summary_data.get('total_olts')}, Details count: {len(summary_data.get('all_olts_details', []))}")
         await self.send(text_data=json.dumps({
             'type': 'dashboard_summary',
             'data': summary_data
         }))
 
     async def disconnect(self, close_code):
-        print(f"WebSocket disconnected: {self.channel_name}")
+        logger.info(f"WebSocket disconnected: {self.channel_name}, code: {close_code}")
         # Leave room group
         await self.channel_layer.group_discard(
             self.group_name,
@@ -140,7 +155,7 @@ class PONOutageConsumer(AsyncWebsocketConsumer):
         }
         # Send message to WebSocket
         await self.send(text_data=json.dumps(message_content))
-        print(f"Sent message to WebSocket group {self.group_name}: {message_content['type']}")
+        logger.info(f"PONOutageConsumer.outage_event: Sent message to WebSocket group {self.group_name}: {message_content['type']}")
 
 
 # Helper function to send messages from synchronous code (like Celery tasks)
@@ -152,7 +167,7 @@ def send_pon_outage_notification(event_type, outage_data_dict):
     """
     channel_layer = get_channel_layer()
     if channel_layer is not None:
-        print(f"Sending WebSocket notification: {event_type}, Data: {outage_data_dict.get('id', 'N/A')}")
+        logger.info(f"SEND_PON_OUTAGE_NOTIFICATION: Sending WebSocket notification: {event_type}, Outage ID: {outage_data_dict.get('id', 'N/A')}")
         async_to_sync(channel_layer.group_send)(
             'pon_outages_group', # Must match self.group_name in consumer
             {
@@ -162,8 +177,33 @@ def send_pon_outage_notification(event_type, outage_data_dict):
             }
         )
     else:
-        print("ERROR: Channel layer not found. Cannot send WebSocket notification.")
+        logger.error("SEND_PON_OUTAGE_NOTIFICATION: Channel layer not found. Cannot send WebSocket notification.")
 
+
+
+class PonPortRefreshConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.pon_port_id = self.scope['url_route']['kwargs']['pon_port_id']
+        self.group_name = f'pon_port_refresh_{self.pon_port_id}'
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+        logger.info(f"PonPortRefreshConsumer connected: {self.channel_name}, joined group: {self.group_name}")
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        logger.info(f"PonPortRefreshConsumer disconnected: {self.channel_name}, left group: {self.group_name}")
+
+    async def receive(self, text_data):
+        # Optionally handle messages from the frontend if needed
+        pass
+
+    async def refresh_ont_list(self, event):
+        # Send a refresh trigger to the frontend
+        await self.send(text_data=json.dumps({
+            'type': 'refresh_ont_list',
+            'pon_port_id': self.pon_port_id,
+            'timestamp': event.get('timestamp'),
+        }))
 
 
 class PONPortConsumer(AsyncWebsocketConsumer):
@@ -183,4 +223,3 @@ class PONPortConsumer(AsyncWebsocketConsumer):
     async def send_pon_port_update(self, event):
         # Send updates to the frontend
         await self.send(text_data=json.dumps(event['data']))
-

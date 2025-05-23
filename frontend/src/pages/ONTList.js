@@ -89,7 +89,31 @@ function ONTList() {
   useEffect(() => {
     fetchOltAndPonPortData();
     fetchData();
-  }, [oltId, slotNumber, ponPortId]); // More stable dependencies
+  }, [fetchOltAndPonPortData, fetchData]); // More stable dependencies
+
+  // Auto-refresh every 1 minute
+  useEffect(() => {
+    if (!ponPortId) return;
+    const interval = setInterval(() => {
+      setIsRefreshing(true);
+      import('../services/api').then(({ triggerOntsRefresh }) => {
+        triggerOntsRefresh(ponPortId)
+          .then((apiResponse) => {
+            showNotification(apiResponse?.message || 'ONTs auto-refreshed.', 'info');
+            fetchData();
+          })
+          .catch((error) => {
+            showNotification('Auto-refresh failed: ' + (error?.message || 'Unknown error'), 'error');
+            fetchData();
+          })
+          .finally(() => {
+            setIsRefreshing(false);
+          });
+      });
+    }, 60000); // 1 minute
+    return () => clearInterval(interval);
+  }, [ponPortId, fetchData]);
+
 
   const handleRefresh = async () => {
     if (!ponPortId) return;

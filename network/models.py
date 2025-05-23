@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -151,7 +152,18 @@ class ONUType(models.Model):
     unique_id = models.CharField(max_length=100, unique=True)
     name = models.CharField(max_length=100)
     pon_type = models.CharField(max_length=50)
-    image_url = models.URLField()
+    ethernet_ports = models.PositiveIntegerField(default=0)
+    wifi_ssids = models.PositiveIntegerField(default=0)
+    voip_ports = models.PositiveIntegerField(default=0)
+    catv = models.BooleanField(default=False)
+    allow_custom_profiles = models.BooleanField(default=False)
+    default_custom_profile = models.CharField(max_length=100, blank=True, null=True)
+    capability = models.CharField(max_length=20, choices=[('Bridging', 'Bridging'), ('Bridging/Routing', 'Bridging/Routing')], default='Bridging/Routing')
+    onu_type_image = models.ImageField(upload_to='onu_type_images/', blank=True, null=True, help_text="Maximum image size is 400x90 px")
+    ethernet_ports_prefix = models.CharField(max_length=50, default='eth_0/')
+    wifi_ssids_prefix = models.CharField(max_length=50, default='wifi_0/')
+    voip_ports_prefix = models.CharField(max_length=50, default='pots_0/')
+    image_url = models.URLField(blank=True, null=True)  # Retain for compatibility
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -170,6 +182,22 @@ class ONU(models.Model):
     rx_power_at_olt = models.FloatField(null=True, blank=True, help_text="OLT Receive Power from ONT (dBm)")
     
     onu_type = models.ForeignKey(ONUType, on_delete=models.CASCADE, related_name='onus')
+
+    # New fields from form image
+    board = models.CharField(max_length=50, blank=True, null=True, help_text="Board (optional)")
+    port = models.CharField(max_length=50, blank=True, null=True, help_text="Port (optional)")
+    onu_mode = models.CharField(max_length=20, choices=[('Routing', 'Routing'), ('Bridging', 'Bridging')], default='Routing')
+    user_vlan_id = models.CharField(max_length=50, blank=True, null=True)
+    zone = models.ForeignKey('Zone', on_delete=models.SET_NULL, blank=True, null=True, related_name='onus')
+    odb = models.ForeignKey('ODB', on_delete=models.SET_NULL, blank=True, null=True, related_name='onus', help_text="ODB (Splitter)")
+    odb_port = models.CharField(max_length=50, blank=True, null=True, help_text="ODB port (optional)")
+    download_speed = models.CharField(max_length=20, blank=True, null=True)
+    upload_speed = models.CharField(max_length=20, blank=True, null=True)
+    name = models.CharField(max_length=100, blank=True, null=True)
+    address_or_comment = models.TextField(blank=True, null=True)
+    onu_external_id = models.CharField(max_length=100, blank=True, null=True, help_text="Use the unique ONU external ID with API or billing systems")
+    use_gps = models.BooleanField(default=False)
+    use_custom_profile = models.BooleanField(default=False, help_text="For better compatibility with generic ONUs")
     
     last_down_time = models.DateTimeField(null=True, blank=True)
     last_down_cause = models.CharField(max_length=100, blank=True, null=True)
@@ -200,13 +228,77 @@ class ODB(models.Model):
         return self.name
 
 class SpeedProfile(models.Model):
-    name = models.CharField(max_length=100)
-    download_speed = models.CharField(max_length=50)
-    upload_speed = models.CharField(max_length=50)
+    name = models.CharField(max_length=100, default='Default Profile')
+    download_speed = models.PositiveIntegerField(
+        default=100,
+        help_text="Download speed in Mbps"
+    )
+    upload_speed = models.PositiveIntegerField(
+        default=50,
+        help_text="Upload speed in Mbps"
+    )
+    type = models.CharField(
+        max_length=50,
+        choices=[
+            ('INTERNET', 'Internet'),
+            ('VOIP', 'VoIP'),
+            ('IPTV', 'IPTV'),
+            ('TR069', 'TR069')
+        ],
+        default='INTERNET'
+    )
+    vlan = models.PositiveIntegerField(
+        default=1,
+        help_text="VLAN ID"
+    )
+    priority = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Priority level (0-7, where 0 is highest)",
+        validators=[MinValueValidator(0), MaxValueValidator(7)]
+    )
+    dscp = models.CharField(
+        max_length=50,
+        default='AF41',
+        blank=True,
+        help_text="DSCP marking (e.g., AF11, EF, CS1, etc.)"
+    )
+    policer_cir = models.PositiveIntegerField(
+        default=100000,  # 100 Mbps
+        help_text="Committed Information Rate (kbps)"
+    )
+    policer_cbs = models.PositiveIntegerField(
+        default=2000,  # 2000 bytes
+        help_text="Committed Burst Size (bytes)"
+    )
+    policer_eir = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Excess Information Rate (kbps, optional)"
+    )
+    policer_ebs = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Excess Burst Size (bytes, optional)"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = 'Speed Profile'
+        verbose_name_plural = 'Speed Profiles'
 
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.download_speed}D/{self.upload_speed}U Mbps)"
+
+    @property
+    def speed_display(self):
+        """Return a formatted string of the speed profile"""
+        return f"{self.download_speed}/{self.upload_speed} Mbps"
+
+    def save(self, *args, **kwargs):
+        # Add any validation or pre-save logic here
+        super().save(*args, **kwargs)
 class PONOutageEvent(models.Model):
     """
     Records detected PON port outages.

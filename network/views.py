@@ -7,6 +7,9 @@ from django.utils import timezone
 from django.db.models import Count, Q
 
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from rest_framework import status
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, status, generics, mixins
 from rest_framework.decorators import action,api_view, permission_classes # For function-based views
@@ -30,7 +33,10 @@ from .tasks import (
     discover_and_create_pon_ports_task, 
     discover_and_update_onts_for_pon_port_task, 
     update_olt_system_metrics_task,
-    check_olt_reachability_task 
+    check_olt_reachability_task,
+    update_all_onts_task,
+    periodically_check_all_olts_reachability,
+    periodically_update_all_onts_data
 )
 
 logger = logging.getLogger(__name__) # Get a logger for this module
@@ -251,6 +257,19 @@ class ONUTypeViewSet(viewsets.ModelViewSet):
     queryset = ONUType.objects.all()
     serializer_class = ONUTypeSerializer
 
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+class AllONTListAPIView(APIView):
+    """
+    API endpoint that returns all ONTs from all PON ports.
+    """
+    def get(self, request, *args, **kwargs):
+        onts = ONU.objects.select_related('onu_type', 'pon_port', 'pon_port__card', 'pon_port__card__olt').all().order_by('pon_port_id', 'ont_index_on_port')
+        serializer = ONUSerializer(onts, many=True)
+        return Response({'results': serializer.data}, status=status.HTTP_200_OK)
+
 class ONUViewSet(mixins.ListModelMixin,
                  mixins.RetrieveModelMixin, # Optional: if you want a detail view for a single ONT
                  viewsets.GenericViewSet):
@@ -368,51 +387,158 @@ def dashboard_summary_view(request):
     """
     API endpoint to provide summary statistics for the dashboard.
     """
-    total_olts = OLT.objects.count()
-    online_olts = OLT.objects.filter(status='active').count()
+    logger.info("API_DASHBOARD_SUMMARY: Request received. Fetching summary data.")
+    try:
+        total_olts = OLT.objects.count()
+        online_olts = OLT.objects.filter(status='active').count()
+        logger.info(f"API_DASHBOARD_SUMMARY: OLTs - Total: {total_olts}, Online: {online_olts}")
 
-    total_onts = ONU.objects.count()
-    online_onts = ONU.objects.filter(status='online').count()
-    offline_onts = ONU.objects.filter(status='offline').count()
+        total_onts = ONU.objects.count()
+        online_onts = ONU.objects.filter(status='online').count()
+        offline_onts = ONU.objects.filter(status='offline').count()
+        logger.info(f"API_DASHBOARD_SUMMARY: ONUs - Total: {total_onts}, Online: {online_onts}, Offline: {offline_onts}")
 
-    # Assuming 'power' and 'los' are possible values for last_down_cause
-    offline_power_onts = ONU.objects.filter(status='offline', last_down_cause__icontains='power').count()
-    offline_los_onts = ONU.objects.filter(status='offline', last_down_cause__icontains='los').count()
+        offline_power_onts = ONU.objects.filter(status='offline', last_down_cause__icontains='power').count()
+        offline_los_onts = ONU.objects.filter(status='offline', last_down_cause__icontains='los').count()
+        logger.info(f"API_DASHBOARD_SUMMARY: Offline ONUs - Power: {offline_power_onts}, LOS: {offline_los_onts}")
+        
+        all_olts_details_list = []
+        olts_for_details = OLT.objects.all().order_by('name')
+        logger.info(f"API_DASHBOARD_SUMMARY: Fetching details for {olts_for_details.count()} OLTs.")
 
-    # Get online OLTs with uptime and temperature (assuming these fields are populated by tasks)
-    #online_olts_data = OLT.objects.filter(status='active').values('id', 'name', 'uptime', 'temperature')
-    
-    # Fetch ALL OLTs with their details
-    all_olts_details_list = []
-    for olt in OLT.objects.all().order_by('name'): # Get all OLTs
-        all_olts_details_list.append({
-            'id': olt.id,
-            'name': olt.name,
-            'status': olt.status,  # The raw status value e.g., 'active', 'inactive'
-            'status_display': olt.get_status_display(), # Human-readable e.g., 'Active', 'Inactive'
-            'uptime': olt.uptime, # Assuming this is the string like "Xdays Yhrs..."
-            'temperature': olt.temperature,
-        })
-    summary_data = {
-        'total_olts': total_olts,
-        'online_olts_count': online_olts,
-        'total_onts': total_onts,
-        'online_onts_count': online_onts,
-        'offline_onts_count': offline_onts,
-        'offline_power_onts_count': offline_power_onts,
-        'offline_los_onts_count': offline_los_onts,
-        #'online_olts_details': list(online_olts_data), # Convert queryset to list
-        'all_olts_details': all_olts_details_list,
-    }
-
-    return Response(summary_data)
+        for olt in olts_for_details:
+            all_olts_details_list.append({
+                'id': olt.id,
+                'name': olt.name,
+                'status': olt.status,
+                'status_display': olt.get_status_display(),
+                'uptime': olt.uptime,
+                'temperature': olt.temperature,
+            })
+        
+        summary_data = {
+            'total_olts': total_olts,
+            'online_olts_count': online_olts,
+            'total_onts': total_onts,
+            'online_onts_count': online_onts,
+            'offline_onts_count': offline_onts,
+            'offline_power_onts_count': offline_power_onts,
+            'offline_los_onts_count': offline_los_onts,
+            'all_olts_details': all_olts_details_list,
+        }
+        logger.info(f"API_DASHBOARD_SUMMARY: Successfully prepared summary data. Total OLTs in summary: {summary_data.get('total_olts')}")
+        return Response(summary_data)
+    except Exception as e:
+        logger.error(f"API_DASHBOARD_SUMMARY: Error preparing summary data: {e}", exc_info=True)
+        return Response({"error": "Failed to generate dashboard summary.", "details": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 def pon_outage_list_view(request):
     """
     API endpoint to list active and recent PON outage events.
     """
-    # Get active outages and maybe recent ones (e.g., ended in the last 24 hours)
-    outages = PONOutageEvent.objects.filter(Q(end_time__isnull=True) | Q(end_time__gte=timezone.now() - timezone.timedelta(minutes=5))).order_by('-start_time')
-    serializer = PONOutageEventSerializer(outages, many=True)
-    return Response(serializer.data)
+    active_outages = PONOutageEvent.objects.filter(resolved_at__isnull=True)
+    recent_outages = PONOutageEvent.objects.filter(
+        resolved_at__isnull=False
+    ).order_by('-created_at')[:10]  # Last 10 resolved outages
+    
+    active_serializer = PONOutageEventSerializer(active_outages, many=True)
+    recent_serializer = PONOutageEventSerializer(recent_outages, many=True)
+    
+    return Response({
+        'active': active_serializer.data,
+        'recent': recent_serializer.data
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def refresh_components(request):
+    """
+    API endpoint to force refresh different components.
+    Expected POST data: {"component": "onts"|"olts"|"pon_ports"}
+    """
+    component = request.data.get('component')
+    
+    if not component:
+        return Response(
+            {"error": "Component type is required (onts/olts/pon_ports)"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        if component == 'onts':
+            return refresh_onts()
+        elif component == 'olts':
+            return refresh_olts()
+        elif component == 'pon_ports':
+            return refresh_pon_ports()
+        else:
+            return Response(
+                {"error": "Invalid component type. Use 'onts', 'olts', or 'pon_ports'"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    except Exception as e:
+        logger.error(f"Error refreshing {component}: {str(e)}", exc_info=True)
+        return Response(
+            {"error": f"Failed to refresh {component}: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+
+@api_view(['GET', 'POST'])
+def refresh_onts(request):
+    """
+    API endpoint to trigger a refresh of all ONTs across all PON ports.
+    """
+    from .tasks import update_all_onts_task
+    try:
+        # Trigger the Celery task
+        task = update_all_onts_task.delay()
+        
+        return Response({
+            "status": "success",
+            "message": "ONT refresh started for all PON ports",
+            "task_id": str(task.id)
+        }, status=status.HTTP_202_ACCEPTED)
+        
+    except Exception as e:
+        logger.error(f"Error triggering ONT refresh: {str(e)}")
+        return Response(
+            {
+                "status": "error",
+                "message": f"Failed to start ONT refresh: {str(e)}"
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+def refresh_olts(request):
+    """Refresh all OLTs reachability"""
+    from .tasks import periodically_check_all_olts_reachability
+    task = periodically_check_all_olts_reachability.delay()
+    return Response({
+        "message": "OLT reachability check started for all OLTs",
+        "task_id": str(task.id)
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def refresh_pon_ports(request):
+    """Refresh all PON ports for all OLTs"""
+    from .tasks import discover_and_create_pon_ports_task
+    from network.models import Card
+    
+    # Get all cards with PON ports
+    cards_with_pon = Card.objects.filter(card_type__icontains='pon')
+    task_ids = []
+    
+    for card in cards_with_pon:
+        task = discover_and_create_pon_ports_task.delay(card.id)
+        task_ids.append(str(task.id))
+    
+    return Response({
+        "message": f"PON port refresh started for {cards_with_pon.count()} cards",
+        "task_ids": task_ids
+    })

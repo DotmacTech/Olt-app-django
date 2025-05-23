@@ -14,34 +14,36 @@ function PONPort() {
   const { oltId, slotNumber } = useParams(); // Get OLT ID and Slot Number from URL
   // ...existing state declarations...
 
+  // Auto-refresh every 1 minute using polling
   useEffect(() => {
-    let wsUrl;
-    const backendHost = process.env.REACT_APP_WS_BACKEND_HOST;
-    if (backendHost) {
-      wsUrl = `ws://${backendHost}/ws/pon_ports/`;
-    } else {
-      wsUrl = 'ws://localhost:8000/ws/pon_ports/';
-    }
-    const ws = new window.WebSocket(wsUrl);
-
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        // You may want to filter messages for this OLT/slot or handle different message types
-        if (message && message.pon_ports) {
-          setPonPorts(message.pon_ports);
-          setLastUpdated(new Date());
-          showNotification('PON port data updated (WebSocket)', 'info');
-        }
-      } catch (err) {
-        console.error('WebSocket message error:', err);
-      }
-    };
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
-    };
-    return () => ws.close();
-  }, [oltId, slotNumber]);
+    const interval = setInterval(() => {
+      fetch('http://localhost:8000/api/olts/9/slot/2/pon-port-details/')
+        .then(async res => {
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`HTTP ${res.status}: ${text}`);
+          }
+          const text = await res.text();
+          try {
+            const data = JSON.parse(text);
+            if (Array.isArray(data)) {
+              setPonPorts(data);
+              setLastUpdated(new Date());
+              showNotification('PON port data auto-refreshed.', 'info');
+            } else {
+              showNotification('Auto-refresh failed: invalid data format.', 'error');
+            }
+          } catch (jsonErr) {
+            console.error('Auto-refresh JSON parse error:', jsonErr, 'Raw response:', text);
+            showNotification('Auto-refresh failed: invalid JSON response.', 'error');
+          }
+        })
+        .catch(err => {
+          showNotification('Auto-refresh failed: ' + (err?.message || 'Unknown error'), 'error');
+        });
+    }, 60000); // 1 minute
+    return () => clearInterval(interval);
+  }, []);
   // (Moved to top)
   const [ponPorts, setPonPorts] = useState([]);
   const [loading, setLoading] = useState(true);
