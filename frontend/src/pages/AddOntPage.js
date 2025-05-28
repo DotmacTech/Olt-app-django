@@ -30,7 +30,8 @@ const initialForm = {
 
 function AddOntPage() {
   const [form, setForm] = useState(initialForm);
-  const [zones, setZones] = useState([]);
+  const [zones, setZones] = useState([]); // Initialize as empty array
+  const [loading, setLoading] = useState(true);
   const [odbs, setOdbs] = useState([]);
   const [onuTypes, setOnuTypes] = useState([]);
   const [ponPorts, setPonPorts] = useState([]); // NEW
@@ -39,7 +40,47 @@ function AddOntPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    getZones().then(data => setZones(Array.isArray(data.results) ? data.results : data));
+    const fetchAllZones = async () => {
+      setLoading(true);
+      let allZones = [];
+      let currentPage = 1;
+      const pageSize = 100; // Adjust based on your API's max page size
+      let hasMore = true;
+
+      try {
+        // Fetch all pages of zones
+        while (hasMore) {
+          const response = await getZones(currentPage, pageSize);
+          
+          // Extract zones from the response
+          const pageZones = response.zones || [];
+          allZones = [...allZones, ...pageZones];
+          
+          // Check if there are more pages
+          const totalItems = response.total || 0;
+          hasMore = allZones.length < totalItems && pageZones.length === pageSize;
+          currentPage++;
+        }
+        
+        setZones(allZones);
+        
+        if (allZones.length === 0) {
+          console.warn('No zones found in the system');
+        }
+        
+      } catch (error) {
+        console.error('Error fetching zones:', {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status
+        });
+        setZones([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchAllZones();
     getOdbs().then(data => setOdbs(Array.isArray(data.results) ? data.results : data));
     getOnuTypes().then(data => setOnuTypes(Array.isArray(data.results) ? data.results : data));
     // Fetch OLTs
@@ -124,8 +165,41 @@ function AddOntPage() {
           <TextField label="User VLAN-ID" name="user_vlan_id" value={form.user_vlan_id} onChange={handleChange} fullWidth margin="normal" />
           <FormControl fullWidth margin="normal">
             <InputLabel>Zone</InputLabel>
-            <Select name="zone" value={form.zone} label="Zone" onChange={handleChange} required>
-              {zones.map(z => <MenuItem key={z.id} value={z.id}>{z.name}</MenuItem>)}
+            <Select 
+              name="zone" 
+              value={form.zone} 
+              label="Zone" 
+              onChange={handleChange} 
+              required
+              disabled={loading}
+            >
+              {loading ? (
+                <MenuItem disabled>Loading zones...</MenuItem>
+              ) : zones.length > 0 ? (
+                zones.map(zone => (
+                  <MenuItem key={zone.id} value={zone.id}>
+                    {zone.name || `Zone ${zone.id}`}
+                  </MenuItem>
+                ))
+              ) : (
+                <Box sx={{ p: 2, textAlign: 'center' }}>
+                  <Typography variant="body2" color="textSecondary" gutterBottom>
+                    No zones available
+                  </Typography>
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate('/zones');
+                    }}
+                    sx={{ mt: 1 }}
+                  >
+                    Create Zones
+                  </Button>
+                </Box>
+              )}
             </Select>
           </FormControl>
           <FormControl fullWidth margin="normal">

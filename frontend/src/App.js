@@ -27,6 +27,7 @@ import OnuTypeDetailPage from './pages/OnuTypeDetailPage'; // Import the ONU Typ
 import EditOnuTypePage from './pages/EditOnuTypePage'; // Import the Edit ONU Type page
 import ZoneListPage from './pages/ZoneListPage';
 import ZoneForm from './components/ZoneForm';
+import SpeedProfileListPage from './pages/SpeedProfileListPage';
 
 const theme = createTheme({
   palette: {
@@ -88,6 +89,9 @@ function App() {
             <Route path="/zones" element={<ZoneListPage />} />
             <Route path="/zones/add" element={<ZoneForm />} />
             <Route path="/zones/:id/edit" element={<ZoneForm />} />
+            
+            {/* Speed Profile Management */}
+            <Route path="/speed-profiles" element={<SpeedProfileListPage />} />
           </Routes>
         </Layout>
       </Router>

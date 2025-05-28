@@ -133,17 +133,25 @@ REST_FRAMEWORK = {
 }
 
 # CORS settings
-CORS_ALLOW_ALL_ORIGINS = True  # Only for development, configure properly for production
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",  # React development server
+    "http://127.0.0.1:3000",  # React development server alternative
+    "http://10.120.120.38:3000",  # Your frontend IP if different
+]
+CORS_ALLOW_CREDENTIALS = True  # Allow cookies to be included in cross-site HTTP requests
 
 # In your project's settings.py
 
 # Celery Configuration Options
 CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Default Redis URL
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0' # If you're storing results in Redis
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'  # If you're storing results in Redis
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'Africa/Lagos' # e.g., 'UTC' or 'Africa/Lagos'
+CELERY_TIMEZONE = 'Africa/Lagos'  # e.g., 'UTC' or 'Africa/Lagos'
+CELERY_TASK_DEFAULT_QUEUE = 'default'
+CELERY_TASK_CREATE_MISSING_QUEUES = True
+CELERY_IMPORTS = ('network.tasks',)  # Explicitly import tasks module
 
 # Celery Beat Settings (if you want to store schedules in the database with django-celery-beat)
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'

@@ -1,6 +1,6 @@
 from .models import (
     OLT, Card, PONPort, UplinkPort, VLAN,
-    ONUType, ONU, Zone, ODB, SpeedProfile,PONOutageEvent
+    ONUType, ONU, Zone, ODB, SpeedProfile, PONOutageEvent, NetworkStatus, NetworkStatusData
 )
 from rest_framework import serializers
 
@@ -138,3 +138,36 @@ class PONOutageEventSerializer(serializers.ModelSerializer):
     class Meta:
         model = PONOutageEvent
         fields = ['id', 'pon_port', 'pon_port_name', 'olt_name', 'slot_port', 'start_time', 'end_time', 'affected_ont_count', 'possible_cause']
+
+
+class NetworkStatusSerializer(serializers.ModelSerializer):
+    """
+    Serializer for NetworkStatus model.
+    """
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+    class Meta:
+        model = NetworkStatus
+        fields = [
+            'id', 'name', 'status', 'status_display', 'last_checked', 
+            'response_time', 'uptime', 'component_type', 'ip_address',
+            'location', 'notes', 'is_monitored', 'last_status_change',
+            'cpu_usage', 'memory_usage', 'disk_usage', 'bandwidth_usage',
+            'packet_loss'
+        ]
+        read_only_fields = ['last_checked', 'last_status_change']
+
+class NetworkStatusDataSerializer(serializers.ModelSerializer):
+    """
+    Serializer for NetworkStatusData model.
+    """
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+    class Meta:
+        model = NetworkStatusData
+        fields = [
+            'id', 'timestamp', 'online_onts', 'offline_onts', 
+            'signal_loss_onts', 'power_failure_onts', 'total_onts',
+            'status', 'status_display', 'avg_rx_power', 'avg_tx_power'
+        ]
+        read_only_fields = ['timestamp']

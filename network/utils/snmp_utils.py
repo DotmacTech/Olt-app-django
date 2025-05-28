@@ -104,13 +104,19 @@ def compile_all_mibs():
     return "completed"
 
 def generate_snmp_packet(slot_num, port_num, onu_id=None):
-    # Ensure slot_num and port_num are integers and are within valid range
-    if not (0 <= slot_num < 16):  # Assuming 4 bits for slot_num (0-15)
-        raise ValueError("Invalid slot number. It must be between 0 and 15.")
-    if not (0 <= port_num < 16):  # Assuming 4 bits for port_num (0-15)
-        raise ValueError("Invalid port number. It must be between 0 and 15.")
+    # Ensure slot_num and port_num are integers
+    try:
+        slot_num = int(slot_num)
+        port_num = int(port_num)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Slot and port numbers must be integers. Got slot: {slot_num}, port: {port_num}") from e
+
+    # Log the values for debugging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"Generating SNMP packet for slot: {slot_num}, port: {port_num}, onu_id: {onu_id}")
 
     # Construct the base SNMP index (left part)
+    # Removed the strict validation to allow a wider range of slot and port numbers
     left_part = (slot_num << 13) | (port_num << 8)
 
     # Generate the SNMP index packet as a string
@@ -300,72 +306,84 @@ def get_system_metrics(host, ssh_username, ssh_password, board=None):
 
 async def _fetch_one_port_details_async(ip, community, slot_num, port_id, snmp_port=161):
     """Helper to fetch all details for a single PON port asynchronously."""
-    # These calls will run concurrently for different OIDs of the same port
-    port_desc_task = get_snmp_data(ip, community, HUAWEI_OLT_PORT_DESCRIPTION_OID, slot_num, port_id, snmp_port=snmp_port)
-    port_status_task = get_snmp_data(ip, community, HUAWEI_OLT_PORT_STATUS_OID, slot_num, port_id, snmp_port=snmp_port)
-    ont_count_task = get_snmp_data(ip, community, HUAWEI_OLT_PORT_ONT_COUNT_OID, slot_num, port_id, snmp_port=snmp_port)
-    tx_power_task = get_snmp_data(ip, community, HUAWEI_OLT_PORT_TX_POWER_OID, slot_num, port_id, snmp_port=snmp_port)
-    rx_power_task = get_snmp_data(ip, community, HUAWEI_OLT_PORT_RX_POWER_OID, slot_num, port_id, snmp_port=snmp_port)
-
-    # Await all tasks for this port
-    port_desc_raw, port_status_raw, number_of_olt_raw, tx_power_raw, rx_power_raw = await asyncio.gather(
-        port_desc_task, port_status_task, ont_count_task, tx_power_task, rx_power_task
-    )
-
-    port_desc = port_desc_raw.split('=')[-1].strip() if port_desc_raw else "N/A"
-    port_status = port_status_raw.split('=')[-1].strip() if port_status_raw else "N/A"
+    logger = logging.getLogger(__name__)
     
-    number_of_olt = 0
-    if number_of_olt_raw:
-        try:
-            number_of_olt = int(number_of_olt_raw.split('=')[-1].strip())
-        except (ValueError, IndexError):
-            number_of_olt = 0 # Default if parsing fails
-            
-    tx_power_str = tx_power_raw.split('=')[-1].strip() if tx_power_raw else "0"
-    rx_power_str = rx_power_raw.split('=')[-1].strip() if rx_power_raw else "0"
-
+    # Initialize default values
+    port_desc = f"GPON {port_id + 1}"
+    port_status = "1"  # Default to 'down'
     online_onts = 0
-    if number_of_olt > 0:
-        ont_status_tasks = []
-        # Fetch status for each potentially configured ONT. Huawei might allow up to 128.
-        # We limit to number_of_olt or a practical max like 128.
-        # The OID for ONT status often includes the ONT index (0-127).
-        for ont_idx in range(min(number_of_olt+1, 128)): # Iterate up to actual ONT count or 128
-            ont_status_tasks.append(
-                get_snmp_data(ip, community, HUAWEI_ONT_ACTIVE_STATUS_OID, slot_num, port_id, ont_idx, snmp_port=snmp_port)
-            )
-        
-        if ont_status_tasks:
-            ont_results_raw = await asyncio.gather(*ont_status_tasks, return_exceptions=True)
-            for res_raw in ont_results_raw:
-                if isinstance(res_raw, Exception) or not res_raw:
-                    continue
-                try:
-                    ont_status_val_str = res_raw.split('=')[-1].strip()
-                    if ont_status_val_str.isdigit():
-                        ont_status_val = int(ont_status_val_str)
-                        if ont_status_val == 1: # Assuming 1 means online
-                            online_onts += 1
-                        
-                except (ValueError, TypeError, AttributeError, IndexError):
-                    continue # Ignore parsing errors for individual ONT status
-    
+    number_of_olt = 0
     tx_p = 0.0
     rx_p = 0.0
+    
     try:
-        tx_p = float(tx_power_str) * 0.01
-    except ValueError:
-        pass # Keep 0.0 if conversion fails
-    try:
-        rx_p = float(rx_power_str) * 0.01
-    except ValueError:
-        pass # Keep 0.0 if conversion fails
+        logger.info(f"Fetching details for OLT {ip}, Slot {slot_num}, Port {port_id}")
+        
+        # These calls will run concurrently for different OIDs of the same port
+        port_desc_task = get_snmp_data(ip, community, HUAWEI_OLT_PORT_DESCRIPTION_OID, slot_num, port_id, snmp_port=snmp_port)
+        port_status_task = get_snmp_data(ip, community, HUAWEI_OLT_PORT_STATUS_OID, slot_num, port_id, snmp_port=snmp_port)
+        online_onts_task = get_snmp_data(ip, community, HUAWEI_OLT_ONLINE_ONT_NUM_OID, slot_num, port_id, snmp_port=snmp_port)
+        number_of_olt_task = get_snmp_data(ip, community, HUAWEI_OLT_ONT_NUM_OID, slot_num, port_id, snmp_port=snmp_port)
+        tx_power_task = get_snmp_data(ip, community, HUAWEI_OLT_TX_POWER_OID, slot_num, port_id, snmp_port=snmp_port)
+        rx_power_task = get_snmp_data(ip, community, HUAWEI_OLT_RX_POWER_OID, slot_num, port_id, snmp_port=snmp_port)
 
+        # Wait for all tasks to complete
+        port_desc, port_status, online_onts, number_of_olt, tx_power_str, rx_power_str = await asyncio.gather(
+            port_desc_task, port_status_task, online_onts_task, number_of_olt_task, tx_power_task, rx_power_task,
+            return_exceptions=True  # This ensures one failure doesn't stop all tasks
+        )
+        
+        # Log any exceptions that occurred during SNMP queries
+        for result in [port_desc, port_status, online_onts, number_of_olt, tx_power_str, rx_power_str]:
+            if isinstance(result, Exception):
+                logger.warning(f"SNMP query error for OLT {ip}, Slot {slot_num}, Port {port_id}: {str(result)}")
+        
+        # Process results with error handling
+        if not isinstance(port_desc, Exception) and port_desc:
+            port_desc = port_desc.split('=')[-1].strip() if '=' in str(port_desc) else str(port_desc)
+        else:
+            port_desc = f"GPON {port_id + 1}"
+            
+        if not isinstance(port_status, Exception) and port_status:
+            port_status = port_status.split('=')[-1].strip() if '=' in str(port_status) else str(port_status)
+        else:
+            port_status = "1"  # Default to 'down'
+        
+        # Safely convert to integers with error handling
+        try:
+            if not isinstance(online_onts, Exception) and online_onts is not None and str(online_onts).isdigit():
+                online_onts = int(online_onts)
+            if not isinstance(number_of_olt, Exception) and number_of_olt is not None and str(number_of_olt).isdigit():
+                number_of_olt = int(number_of_olt)
+        except (TypeError, ValueError) as e:
+            logger.error(f"Error converting ONT counts to integers for OLT {ip}, Slot {slot_num}, Port {port_id}: {str(e)}")
+            online_onts = 0
+            number_of_olt = 0
+        
+        # Convert power values from 0.01 dBm to dBm
+        try:
+            if not isinstance(tx_power_str, Exception) and tx_power_str is not None:
+                tx_p = float(str(tx_power_str).split('=')[-1].strip()) * 0.01 if '=' in str(tx_power_str) else float(str(tx_power_str).strip()) * 0.01
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Error converting TX power for OLT {ip}, Slot {slot_num}, Port {port_id}: {str(e)}")
+            tx_p = 0.0
+            
+        try:
+            if not isinstance(rx_power_str, Exception) and rx_power_str is not None:
+                rx_p = float(str(rx_power_str).split('=')[-1].strip()) * 0.01 if '=' in str(rx_power_str) else float(str(rx_power_str).strip()) * 0.01
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Error converting RX power for OLT {ip}, Slot {slot_num}, Port {port_id}: {str(e)}")
+            rx_p = 0.0
+            
+        logger.info(f"Successfully fetched details for OLT {ip}, Slot {slot_num}, Port {port_id}")
+        
+    except Exception as e:
+        logger.error(f"Unexpected error in _fetch_one_port_details_async for OLT {ip}, Slot {slot_num}, Port {port_id}: {str(e)}", exc_info=True)
+    
     return {
-        "port_id": port_id, # This is port_index_on_card
+        "port_id": port_id,
         "online": online_onts,
-        "number_of_olt": number_of_olt, # Total configured ONTs on this port
+        "number_of_olt": number_of_olt,
         "port_desc": port_desc,
         "port_status": port_status,
         "tx_power": tx_p,
@@ -608,15 +626,22 @@ async def _fetch_one_ont_details_async(ip, community, slot_num, port_num, ont_id
 
 async def get_all_ont_details_for_pon_port_async(ip, community, slot_num, port_num, num_configured_onts, snmp_port=161):
     """Fetches details for all configured ONTs on a specific PON port."""
+    logger = logging.getLogger(__name__)
     ont_detail_tasks = []
+    
     # Huawei typically supports up to 128 ONTs per port (index 0-127)
-    # We iterate up to the number of configured ONTs reported by the OLT for that port,
-    # or a practical limit like 128 if num_configured_onts is unexpectedly high or zero.
-    # If num_configured_onts is 0, we might still try to discover a few to see if any respond.
-    limit = min(max(num_configured_onts, 32), 128) # Try at least 32, max 128, or num_configured
-    if num_configured_onts == 0: # If OLT reports 0, maybe it's an error, try a few.
-        limit = 32 
-
+    max_onts_per_port = 128
+    
+    # If we have a valid configured ONT count, use that (capped at max_onts_per_port)
+    if num_configured_onts and num_configured_onts > 0:
+        limit = min(num_configured_onts, max_onts_per_port)
+        logger.info(f"Checking {limit} ONTs for slot {slot_num}/port {port_num} (reported {num_configured_onts} configured)")
+    else:
+        # If no configured count or it's 0, check the full range to be safe
+        limit = max_onts_per_port
+        logger.warning(f"No configured ONT count for slot {slot_num}/port {port_num}, checking all {limit} possible ONTs")
+    
+    # Create tasks for all ONT indices we want to check
     for ont_idx in range(limit):
         ont_detail_tasks.append(
             _fetch_one_ont_details_async(ip, community, slot_num, port_num, ont_idx, snmp_port)

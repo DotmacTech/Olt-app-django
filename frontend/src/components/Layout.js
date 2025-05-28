@@ -17,10 +17,17 @@ const navItems = [
 function Layout({ children }) {
   const [settingsAnchorEl, setSettingsAnchorEl] = React.useState(null);
   const open = Boolean(settingsAnchorEl);
-  const handleSettingsClick = (event) => {
+  
+  const handleSettingsOpen = (event) => {
     setSettingsAnchorEl(event.currentTarget);
   };
+  
   const handleSettingsClose = () => {
+    setSettingsAnchorEl(null);
+  };
+  
+  // Close menu when mouse leaves the menu
+  const handleMenuMouseLeave = () => {
     setSettingsAnchorEl(null);
   };
 
@@ -42,33 +49,54 @@ function Layout({ children }) {
           <Button color="inherit">Reports</Button>
           <Button color="inherit">Save Config</Button>
           {/* Settings Dropdown */}
-          <Button
-            color="inherit"
-            id="settings-button"
-            aria-controls={open ? 'settings-menu' : undefined}
-            aria-haspopup="true"
-            aria-expanded={open ? 'true' : undefined}
-            onClick={handleSettingsClick}
+          <Box
+            onMouseEnter={handleSettingsOpen}
+            onMouseLeave={handleSettingsClose}
+            sx={{ display: 'inline-block' }}
           >
-            Settings
-          </Button>
-          <Menu
-            id="settings-menu"
-            anchorEl={settingsAnchorEl}
-            open={open}
-            onClose={handleSettingsClose}
-            MenuListProps={{ 'aria-labelledby': 'settings-button' }}
-          >
-            <MenuItem component={Link} to="/olt-list" onClick={handleSettingsClose}>
-              OLTs
-            </MenuItem>
-            <MenuItem component={Link} to="/onu-types" onClick={handleSettingsClose}>
-              ONU Types
-            </MenuItem>
-            <MenuItem component={Link} to="/zones" onClick={handleSettingsClose}>
-              Zones
-            </MenuItem>
-          </Menu>
+            <Button
+              color="inherit"
+              id="settings-button"
+              aria-controls={open ? 'settings-menu' : undefined}
+              aria-haspopup="true"
+              aria-expanded={open ? 'true' : undefined}
+            >
+              Settings
+            </Button>
+            <Menu
+              id="settings-menu"
+              anchorEl={settingsAnchorEl}
+              open={open}
+              onClose={handleSettingsClose}
+              MenuListProps={{ 
+                'aria-labelledby': 'settings-button',
+                onMouseLeave: handleMenuMouseLeave,
+                sx: { pointerEvents: 'auto' }
+              }}
+              disableAutoFocusItem
+              disableRestoreFocus
+              disableScrollLock
+              sx={{ 
+                pointerEvents: 'none',
+                '& .MuiPaper-root': {
+                  pointerEvents: 'auto'
+                }
+              }}
+            >
+              <MenuItem component={Link} to="/olt-list" onClick={handleSettingsClose}>
+                OLTs
+              </MenuItem>
+              <MenuItem component={Link} to="/onu-types" onClick={handleSettingsClose}>
+                ONU Types
+              </MenuItem>
+              <MenuItem component={Link} to="/zones" onClick={handleSettingsClose}>
+                Zones
+              </MenuItem>
+              <MenuItem component={Link} to="/speed-profiles" onClick={handleSettingsClose}>
+                Speed Profiles
+              </MenuItem>
+            </Menu>
+          </Box>
           <Button color="inherit">Logout</Button>
         </Toolbar>
       </AppBar>

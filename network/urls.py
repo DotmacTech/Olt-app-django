@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter # Keep this for non-nested
 from rest_framework_nested import routers # For nested routers
 from .views import (
     OLTViewSet, CardViewSet, PONPortViewSet, UplinkPortViewSet, VLANViewSet,
-    ONUTypeViewSet, ONUViewSet, ODBViewSet, SpeedProfileViewSet,
+    ONUTypeViewSet, ONUViewSet, ODBViewSet, SpeedProfileViewSet, NetworkStatusViewSet,
     SystemMetricsAPIView, get_olt_pon_port_context_info, dashboard_summary_view, 
     pon_outage_list_view, refresh_components, refresh_onts, refresh_olts, refresh_pon_ports
 )
@@ -22,6 +22,7 @@ router.register(r'onts', ONUViewSet, basename='ont')
 router.register(r'zones', ZoneViewSet)
 router.register(r'odbs', ODBViewSet)
 router.register(r'speed-profiles', SpeedProfileViewSet)
+router.register(r'network-status', NetworkStatusViewSet, basename='network-status')
 
 olts_router = routers.NestedSimpleRouter(router, r'olts', lookup='olt')
 olts_router.register(r'cards', CardViewSet, basename='olt-cards')

@@ -299,6 +299,52 @@ class SpeedProfile(models.Model):
     def save(self, *args, **kwargs):
         # Add any validation or pre-save logic here
         super().save(*args, **kwargs)
+
+class NetworkStatus(models.Model):
+    """Tracks the status of various network components."""
+    STATUS_CHOICES = [
+        ('up', 'Up'),
+        ('down', 'Down'),
+        ('degraded', 'Degraded'),
+        ('maintenance', 'Maintenance'),
+    ]
+    
+    name = models.CharField(max_length=100, unique=True, help_text="Name of the network component")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='up')
+    last_checked = models.DateTimeField(auto_now=True)
+    response_time = models.FloatField(null=True, blank=True, help_text="Response time in milliseconds")
+    uptime = models.FloatField(default=100.0, help_text="Uptime percentage")
+    component_type = models.CharField(max_length=50, help_text="Type of network component")
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    location = models.CharField(max_length=200, blank=True, null=True)
+    notes = models.TextField(blank=True, null=True)
+    is_monitored = models.BooleanField(default=True)
+    last_status_change = models.DateTimeField(auto_now_add=True)
+    
+    # Additional metrics
+    cpu_usage = models.FloatField(null=True, blank=True, help_text="CPU usage percentage")
+    memory_usage = models.FloatField(null=True, blank=True, help_text="Memory usage percentage")
+    disk_usage = models.FloatField(null=True, blank=True, help_text="Disk usage percentage")
+    
+    # Network specific metrics
+    bandwidth_usage = models.FloatField(null=True, blank=True, help_text="Bandwidth usage percentage")
+    packet_loss = models.FloatField(null=True, blank=True, help_text="Packet loss percentage")
+    
+    class Meta:
+        verbose_name_plural = 'Network Statuses'
+        ordering = ['component_type', 'name']
+    
+    def __str__(self):
+        return f"{self.name} ({self.get_status_display()})"
+    
+    def save(self, *args, **kwargs):
+        # Update last_status_change if status changed
+        if self.pk:
+            old_status = NetworkStatus.objects.get(pk=self.pk).status
+            if old_status != self.status:
+                self.last_status_change = timezone.now()
+        super().save(*args, **kwargs)
+
 class PONOutageEvent(models.Model):
     """
     Records detected PON port outages.
@@ -317,3 +363,32 @@ class PONOutageEvent(models.Model):
 
     class Meta:
         ordering = ['-start_time']
+
+class NetworkStatusData(models.Model):
+    """
+    Stores historical network status data for charting and analysis.
+    """
+    timestamp = models.DateTimeField(default=timezone.now)
+    online_onts = models.PositiveIntegerField(default=0)
+    offline_onts = models.PositiveIntegerField(default=0)
+    signal_loss_onts = models.PositiveIntegerField(default=0)
+    power_failure_onts = models.PositiveIntegerField(default=0)
+    total_onts = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=[
+        ('up', 'Up'),
+        ('degraded', 'Degraded'),
+        ('down', 'Down'),
+        ('maintenance', 'Maintenance')
+    ], default='up')
+    
+    # Additional metrics
+    avg_rx_power = models.FloatField(null=True, blank=True)
+    avg_tx_power = models.FloatField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-timestamp']
+        verbose_name = 'Network Status Data'
+        verbose_name_plural = 'Network Status Data'
+        
+    def __str__(self):
+        return f"Network Status at {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"

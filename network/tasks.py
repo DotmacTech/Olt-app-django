@@ -3,7 +3,7 @@ from django.utils import timezone
 import logging # Import the logging module
 import asyncio
 
-from .models import OLT, Card, PONPort, ONU, ONUType, PONOutageEvent
+from .models import OLT, Card, PONPort, ONU, ONUType, PONOutageEvent, Zone, ODB, SpeedProfile
 from .utils.snmp_utils import get_system_metrics, get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async, get_ssh_metrics
 from .utils.board_utils import get_installed_board_info
 from .utils.network_utils import ping_host
@@ -14,8 +14,8 @@ from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
-@shared_task
-def update_all_onts_task():
+@shared_task(bind=True, time_limit=300, soft_time_limit=240)
+def update_all_onts_task(self):
     """
     Task to update ONT information for all PON ports across all OLTs.
     This task will:
@@ -23,6 +23,8 @@ def update_all_onts_task():
     2. For each port, fetch ONT details via SNMP
     3. Update or create ONT records in the database
     """
+    logger = logging.getLogger(__name__)
+    
     try:
         # Get all active PON ports
         pon_ports = PONPort.objects.select_related('card__olt').all()
@@ -34,19 +36,30 @@ def update_all_onts_task():
         
         for port in pon_ports:
             try:
-                # Use the async helper to get ONT info for this PON port
-                ont_info = get_ont_info_per_slot_async(
-                    host=port.card.olt.ip_address,
-                    community=port.card.olt.snmp_ro_community,
-                    slot=port.card.slot_number,
-                    port=port.port_index_on_card,
-                    olt_id=port.card.olt.id
-                )
+                # Log which port we're processing
+                logger.info(f"Processing PON port {port.id} on OLT {port.card.olt.name} (Slot {port.card.slot_number}, Port {port.port_index_on_card})")
                 
-                if not ont_info or 'data' not in ont_info or not ont_info['data']:
-                    logger.warning(f"No ONT data received for PON port {port.id} on OLT {port.card.olt.name}")
+                # Use the async helper to get ONT info for this PON port
+                try:
+                    ont_info = asyncio.run(get_ont_info_per_slot_async(
+                        ip=port.card.olt.ip_address,
+                        community=port.card.olt.snmp_ro_community,
+                        slot_num=port.card.slot_number,
+                        number_of_ports=1,  # We're processing one port at a time
+                        snmp_port=port.card.olt.snmp_port or 161
+                    ))
+                except Exception as e:
+                    logger.error(f"Error getting ONT info for PON port {port.id}: {str(e)}", exc_info=True)
                     error_count += 1
                     continue
+                
+                if not ont_info or not isinstance(ont_info, list) or not ont_info:
+                    logger.warning(f"No valid ONT data received for PON port {port.id} on OLT {port.card.olt.name}")
+                    error_count += 1
+                    continue
+                
+                # Log successful fetch
+                logger.info(f"Successfully fetched ONT data for PON port {port.id}: {ont_info}")
                 
                 # Process each ONT
                 with transaction.atomic():
@@ -386,6 +399,116 @@ def periodically_update_all_onts_data():
         
     logger.info(f"TASK_periodically_update_all_onts: Finished queueing ONT data updates for {active_pon_ports.count()} PON Ports.")
 
+
+@shared_task
+@shared_task
+def update_all_olts_task():
+    """
+    Task to update all OLTs when the refresh button is clicked.
+    This will:
+    1. Check reachability of all OLTs
+    2. Update system metrics for reachable OLTs
+    3. Refresh cards and PON ports for each OLT
+    """
+    logger.info("TASK_update_all_olts_task: Starting full OLT update...")
+    
+    # Get all OLTs regardless of status
+    olts = OLT.objects.all()
+    updated_count = 0
+    error_count = 0
+    
+    for olt in olts:
+        try:
+            # Check reachability first
+            is_reachable = ping_host(olt.ip_address)
+            olt.is_reachable = is_reachable
+            olt.last_seen = timezone.now()
+            olt.save(update_fields=['is_reachable', 'last_seen'])
+            
+            if is_reachable:
+                # Queue metrics update
+                update_olt_system_metrics_task.apply_async(
+                    args=[olt.id],
+                    queue='receive_periodic',
+                    countdown=5  # Small delay to prevent overloading
+                )
+                
+                # Queue card discovery
+                discover_and_create_cards_task.apply_async(
+                    args=[olt.id],
+                    queue='receive_periodic',
+                    countdown=10  # Slightly longer delay
+                )
+                
+                logger.info(f"TASK_update_all_olts_task: Queued updates for OLT {olt.name} ({olt.ip_address})")
+                updated_count += 1
+            else:
+                logger.warning(f"TASK_update_all_olts_task: OLT {olt.name} ({olt.ip_address}) is not reachable")
+                
+        except Exception as e:
+            error_count += 1
+            logger.error(f"TASK_update_all_olts_task: Error updating OLT {olt.name} ({olt.ip_address}): {str(e)}")
+    
+    result = {
+        "status": "completed",
+        "olts_processed": olts.count(),
+        "olts_updated": updated_count,
+        "errors": error_count,
+        "message": f"Successfully updated {updated_count} out of {olts.count()} OLTs"
+    }
+    
+    if error_count > 0:
+        result["status"] = "completed_with_errors"
+    
+    logger.info(f"TASK_update_all_olts_task: Finished with result: {result}")
+    return result
+
+@shared_task
+def update_all_pon_ports_task():
+    """
+    Task to update all PON ports across all OLTs.
+    This will:
+    1. Get all OLTs
+    2. For each OLT, queue a PON port discovery task
+    3. Return a summary of the operation
+    """
+    logger.info("TASK_update_all_pon_ports_task: Starting full PON port update...")
+    
+    # Get all OLTs that are reachable
+    olts = OLT.objects.filter(is_reachable=True)
+    total_ports = 0
+    queued_olts = 0
+    error_count = 0
+    
+    for olt in olts:
+        try:
+            # Queue PON port discovery for each OLT
+            discover_and_create_pon_ports_task.apply_async(
+                args=[olt.id],
+                queue='receive_periodic',
+                countdown=5 * queued_olts  # Stagger the tasks
+            )
+            
+            logger.info(f"TASK_update_all_pon_ports_task: Queued PON port update for OLT {olt.name} ({olt.ip_address})")
+            queued_olts += 1
+            
+        except Exception as e:
+            error_count += 1
+            logger.error(f"TASK_update_all_pon_ports_task: Error queuing PON port update for OLT {olt.name} ({olt.ip_address}): {str(e)}")
+    
+    result = {
+        "status": "completed",
+        "olts_processed": olts.count(),
+        "olts_queued": queued_olts,
+        "errors": error_count,
+        "message": f"Successfully queued PON port updates for {queued_olts} out of {olts.count()} reachable OLTs"
+    }
+    
+    if error_count > 0:
+        result["status"] = "completed_with_errors"
+    
+    logger.info(f"TASK_update_all_pon_ports_task: Finished with result: {result}")
+    return result
 
 @shared_task
 def periodically_check_all_olts_reachability():

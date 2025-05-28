@@ -1,24 +1,17 @@
-# c:\Users\ibrah\CascadeProjects\Olt-app-django\oltmanager\celery.py
 import os
-import django # Import Django
 from celery import Celery
-from celery.schedules import crontab # For cron-like scheduling
 
 # Set the default Django settings module for the 'celery' program.
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'oltmanager.settings') # Replace 'oltmanager' with your project's name
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'oltmanager.settings')
 
-django.setup() # Explicitly setup Django settings
+# Create the Celery application without any configuration
+app = Celery('oltmanager')
 
-# Now that Django is set up, we can safely import tasks that might depend on Django models/settings
-# from network.tasks import test # Example: if you had tasks defined here and needed them for setup
-
-app = Celery('oltmanager') # Replace 'oltmanager' with your project's name
-
-# Using a string here means the worker doesn't have to serialize
-# the configuration object to child processes.
-# - namespace='CELERY' means all celery-related configuration keys
-#   should have a `CELERY_` prefix.
+# Configure Celery using settings from Django settings file
 app.config_from_object('django.conf:settings', namespace='CELERY')
+
+# Load task modules from all registered Django apps
+app.autodiscover_tasks()
 # Define Celery queues and routing
 app.conf.task_routes = {
     'network.tasks.periodically_*': {'queue': 'receive_periodic'},  # Tasks starting with "periodically_" go to "receive_periodic" queue
@@ -41,16 +34,9 @@ app.conf.task_queues = {
     },
 }
 
-# Load task modules from all registered Django app configs.
-app.autodiscover_tasks()
-
-# Import tasks after Django is fully loaded to avoid circular imports
-from network.tasks import (
-    periodically_check_all_olts_reachability,
-    periodically_update_all_onts_data,
-    periodically_update_all_olts_metrics,
-    periodically_detect_pon_outages
-)
+@app.task(bind=True)
+def debug_task(self):
+    print(f'Request: {self.request!r}')
 
 @app.on_after_configure.connect
 def setup_periodic_tasks(sender: Celery, **kwargs):

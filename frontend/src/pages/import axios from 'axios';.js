@@ -2,22 +2,11 @@ import axios from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 console.log(process.env.REACT_APP_API_BASE_URL)
-// Function to get CSRF token from cookies
-const getCsrfToken = () => {
-  const cookieValue = document.cookie
-    .split('; ')
-    .find(row => row.startsWith('csrftoken='))
-    ?.split('=')[1];
-  return cookieValue || '';
-};
-
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
-    'X-CSRFToken': getCsrfToken(),
   },
-  withCredentials: true,
 });
 
 // System Metrics
@@ -521,28 +510,6 @@ export const deleteSpeedProfile = async (id) => {
   }
 };
 
-// --- Network Status API Calls ---
-
-export const getNetworkStatus = async () => {
-  try {
-    const response = await api.get('/network-status/');
-    return response.data;
-  } catch (error) {
-    console.error('Error fetching network status:', error);
-    throw error;
-  }
-};
-
-export const getNetworkStatusSummary = async () => {
-  try {
-    const response = await api.get('/network-status/summary/');
-    return response.data;
-  } catch (error) {
-    console.error('Error fetching network status summary:', error);
-    throw error;
-  }
-};
-
 // --- Dashboard API Calls ---
 
 export const getDashboardSummary = async () => {
@@ -571,20 +538,17 @@ export const refreshAllOnts = async () => {
     return response.data;
   } catch (error) {
     console.error('Error refreshing all ONTs:', error.response || error.message);
-    
-    // Provide more detailed error message
-    if (error.response) {
-      if (error.response.status === 403) {
-        throw new Error('You do not have permission to refresh ONTs. Please contact your administrator.');
-      } else if (error.response.data?.detail) {
-        throw new Error(error.response.data.detail);
-      } else if (error.response.data?.message) {
-        throw new Error(error.response.data.message);
-      }
-    }
-    
-    throw new Error(error.message || 'Failed to refresh ONTs. Please try again.');
+    throw error;
   }
+};
+
+// Helper function to get CSRF token
+const getCsrfToken = () => {
+  const cookieValue = document.cookie
+    .split('; ')
+    .find(row => row.startsWith('csrftoken='))
+    ?.split('=')[1];
+  return cookieValue;
 };
 
 /**

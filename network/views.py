@@ -18,12 +18,12 @@ from rest_framework.response import Response
 
 from .models import (
     OLT, Card, PONPort, UplinkPort, VLAN,
-    ONUType, ONU, Zone, ODB, SpeedProfile,PONOutageEvent
+    ONUType, ONU, Zone, ODB, SpeedProfile, PONOutageEvent, NetworkStatus
 )
 from .serializers import ( # Import the new serializers
     OLTListSerializer, OLTDetailSerializer, OLTCreateUpdateSerializer, PONPortSerializer,
-        CardSerializer, PONPortSerializer, ONUSerializer, UplinkPortSerializer, VLANSerializer,ONUTypeSerializer, ONUSerializer,
-    ZoneSerializer, ODBSerializer, SpeedProfileSerializer,PONOutageEventSerializer
+    CardSerializer, PONPortSerializer, ONUSerializer, UplinkPortSerializer, VLANSerializer, ONUTypeSerializer, ONUSerializer,
+    ZoneSerializer, ODBSerializer, SpeedProfileSerializer, PONOutageEventSerializer, NetworkStatusSerializer
 )
 from .utils.board_utils import get_installed_board_info # Assuming this is the correct pa
 # from .tasks import update_olt_metrics
@@ -356,6 +356,61 @@ class SpeedProfileViewSet(viewsets.ModelViewSet):
     queryset = SpeedProfile.objects.all()
     serializer_class = SpeedProfileSerializer
 
+
+class NetworkStatusViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    API endpoint that allows network status to be viewed.
+    """
+    queryset = NetworkStatus.objects.filter(is_monitored=True)
+    serializer_class = NetworkStatusSerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['status', 'component_type']
+    
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """
+        Get a summary of network status.
+        """
+        from django.db.models import Count, Avg, F, Q
+        
+        # Get basic counts
+        total_components = self.get_queryset().count()
+        up_components = self.get_queryset().filter(status='up').count()
+        down_components = self.get_queryset().filter(status='down').count()
+        degraded_components = self.get_queryset().filter(status='degraded').count()
+        
+        # Calculate average metrics
+        avg_metrics = self.get_queryset().aggregate(
+            avg_uptime=Avg('uptime'),
+            avg_response_time=Avg('response_time'),
+            avg_cpu=Avg('cpu_usage'),
+            avg_memory=Avg('memory_usage')
+        )
+        
+        # Get component types with counts
+        component_types = (
+            self.get_queryset()
+            .values('component_type')
+            .annotate(count=Count('id'), up=Count('id', filter=Q(status='up')))
+            .order_by('-count')
+        )
+        
+        # Prepare response
+        data = {
+            'total_components': total_components,
+            'up_components': up_components,
+            'down_components': down_components,
+            'degraded_components': degraded_components,
+            'uptime_percentage': round(avg_metrics['avg_uptime'] or 0, 2),
+            'avg_response_time': round(avg_metrics['avg_response_time'] or 0, 2) if avg_metrics['avg_response_time'] is not None else None,
+            'avg_cpu_usage': round(avg_metrics['avg_cpu'] or 0, 2) if avg_metrics['avg_cpu'] is not None else None,
+            'avg_memory_usage': round(avg_metrics['avg_memory'] or 0, 2) if avg_metrics['avg_memory'] is not None else None,
+            'component_types': list(component_types),
+            'last_updated': self.get_queryset().order_by('-last_checked').first().last_checked if self.get_queryset().exists() else None
+        }
+        
+        return Response(data)
+
 from network.utils.snmp_utils import get_system_metrics
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -492,53 +547,137 @@ def refresh_onts(request):
     API endpoint to trigger a refresh of all ONTs across all PON ports.
     """
     from .tasks import update_all_onts_task
+    from celery import current_app
+    
+    logger = logging.getLogger(__name__)
+    
     try:
+        # Check if there's already a running task of this type
+        inspector = current_app.control.inspect()
+        active_tasks = inspector.active() or {}
+        
+        # Check if there's already a running update_all_onts_task
+        for worker, tasks in active_tasks.items():
+            for task in tasks:
+                if task['name'] == 'network.tasks.update_all_onts_task':
+                    return Response({
+                        "status": "pending",
+                        "message": "ONT refresh is already in progress",
+                        "task_id": task['id']
+                    }, status=status.HTTP_200_OK)
+        
         # Trigger the Celery task
         task = update_all_onts_task.delay()
         
+        logger.info(f"Started ONT refresh task with ID: {task.id}")
+        
         return Response({
-            "status": "success",
+            "status": "started",
             "message": "ONT refresh started for all PON ports",
             "task_id": str(task.id)
         }, status=status.HTTP_202_ACCEPTED)
         
     except Exception as e:
-        logger.error(f"Error triggering ONT refresh: {str(e)}")
+        error_msg = f"Error triggering ONT refresh: {str(e)}"
+        logger.error(error_msg, exc_info=True)
         return Response(
             {
                 "status": "error",
-                "message": f"Failed to start ONT refresh: {str(e)}"
+                "message": error_msg,
+                "error_type": str(type(e).__name__)
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
+@api_view(['GET', 'POST'])
 def refresh_olts(request):
-    """Refresh all OLTs reachability"""
-    from .tasks import periodically_check_all_olts_reachability
-    task = periodically_check_all_olts_reachability.delay()
-    return Response({
-        "message": "OLT reachability check started for all OLTs",
-        "task_id": str(task.id)
-    })
+    """
+    API endpoint to trigger a full refresh of all OLTs.
+    
+    Supports both GET and POST methods.
+    
+    This will:
+    1. Check reachability of all OLTs
+    2. Update system metrics for reachable OLTs
+    3. Refresh cards and PON ports for each OLT
+    
+    Returns:
+        Response with task ID and status
+    """
+    from .tasks import update_all_olts_task
+    
+    if request.method == 'GET':
+        # Handle GET request - return a simple message about the endpoint
+        return Response({
+            "status": "info",
+            "message": "Send a POST request to this endpoint to refresh all OLTs"
+        })
+    
+    # Handle POST request - start the refresh task
+    try:
+        # Start the async task to update all OLTs
+        task = update_all_olts_task.delay()
+        
+        # Log the task initiation
+        logger.info(f"Started full OLT update task with ID: {task.id}")
+        
+        return Response({
+            "status": "success",
+            "message": "Full OLT update started for all OLTs. This may take several minutes.",
+            "task_id": str(task.id)
+        }, status=status.HTTP_202_ACCEPTED)
+        
+    except Exception as e:
+        logger.error(f"Error starting full OLT update: {str(e)}")
+        return Response(
+            {"status": "error", "message": f"Failed to start full OLT update: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@api_view(['GET', 'POST'])
+
 def refresh_pon_ports(request):
-    """Refresh all PON ports for all OLTs"""
-    from .tasks import discover_and_create_pon_ports_task
-    from network.models import Card
+    """
+    API endpoint to trigger a refresh of all PON ports.
     
-    # Get all cards with PON ports
-    cards_with_pon = Card.objects.filter(card_type__icontains='pon')
-    task_ids = []
+    Supports both GET and POST methods.
     
-    for card in cards_with_pon:
-        task = discover_and_create_pon_ports_task.delay(card.id)
-        task_ids.append(str(task.id))
+    This will:
+    1. Get all reachable OLTs
+    2. Queue PON port discovery for each OLT
+    3. Return a summary of the operation
     
-    return Response({
-        "message": f"PON port refresh started for {cards_with_pon.count()} cards",
-        "task_ids": task_ids
-    })
+    Returns:
+        Response with task ID and status
+    """
+    from .tasks import update_all_pon_ports_task
+    
+    if request.method == 'GET':
+        # Handle GET request - return a simple message about the endpoint
+        return Response({
+            "status": "info",
+            "message": "Send a POST request to this endpoint to refresh all PON ports"
+        })
+    
+    # Handle POST request - start the refresh task
+    try:
+        # Start the async task to update all PON ports
+        task = update_all_pon_ports_task.delay()
+        
+        # Log the task initiation
+        logger.info(f"Started full PON port update task with ID: {task.id}")
+        
+        return Response({
+            "status": "success",
+            "message": "PON port refresh started for all reachable OLTs. This may take several minutes.",
+            "task_id": str(task.id)
+        }, status=status.HTTP_202_ACCEPTED)
+        
+    except Exception as e:
+        logger.error(f"Error starting PON port refresh: {str(e)}")
+        return Response(
+            {"status": "error", "message": f"Failed to start PON port refresh: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
