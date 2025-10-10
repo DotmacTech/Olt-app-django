@@ -2,8 +2,9 @@ from celery import shared_task
 from django.utils import timezone
 import logging # Import the logging module
 import asyncio
+from django.db.models import Count, Q
 
-from .models import OLT, Card, PONPort, ONU, ONUType, PONOutageEvent, Zone, ODB, SpeedProfile
+from .models import OLT, Card, PONPort, ONU, ONUType, PONOutageEvent, Zone, ODB, SpeedProfile, NetworkStatusData, UnconfiguredONT
 from .utils.snmp_utils import get_system_metrics, get_ont_info_per_slot_async, get_all_ont_details_for_pon_port_async, get_ssh_metrics
 from .utils.board_utils import get_installed_board_info
 from .utils.network_utils import ping_host
@@ -11,6 +12,8 @@ from django.utils import timezone
 import logging
 from datetime import datetime, timedelta
 from django.db import transaction
+
+from .utils.discover_onts import ONTDiscovery # Import the ONTDiscovery class
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,7 @@ def update_all_onts_task(self):
         for port in pon_ports:
             try:
                 # Log which port we're processing
-                logger.info(f"Processing PON port {port.id} on OLT {port.card.olt.name} (Slot {port.card.slot_number}, Port {port.port_index_on_card})")
+                # logger.info(f"Processing PON port {port.id} on OLT {port.card.olt.name} (Slot {port.card.slot_number}, Port {port.port_index_on_card})")
                 
                 # Use the async helper to get ONT info for this PON port
                 try:
@@ -119,16 +122,16 @@ def discover_and_create_cards_task(olt_id):
         olt = OLT.objects.get(id=olt_id)
         logger.info(f"TASK_discover_and_create_cards: Starting card discovery for OLT: {olt.name} ({olt.ip_address})")
 
-        # Using SSH-based get_installed_board_info for card discovery
-        # This function is synchronous.
-        board_info_result = get_installed_board_info(
+        # Use asyncio.run to execute the async function synchronously
+        board_info_result = asyncio.run(get_installed_board_info(
             host=olt.ip_address,
-            username=olt.telnet_username, # Assuming telnet creds are used for SSH too
+            username=olt.telnet_username,
             password=olt.telnet_password,
-            frame='0' # Adjust frame_id if necessary or make it configurable
-        )
+            frame=getattr(olt, 'frame_id', '0')
+        ))
 
-        if board_info_result:
+        # Check for a successful result from the utility function
+        if board_info_result and board_info_result.get('status') == 'success':
             boards_data = board_info_result.get('data', {}).get('boards', [])
             for board_data in boards_data:
                 card, created = Card.objects.update_or_create(
@@ -148,7 +151,7 @@ def discover_and_create_cards_task(olt_id):
                 # If the card has ports and is likely a PON card, trigger PON port discovery
                 # Adjust condition based on how you identify PON cards (e.g., card_type name)
                 if card.port_count > 0: # Basic check
-                    discover_and_create_pon_ports_task.apply_async(args=(card.id,), queue='receive_periodic')
+                    discover_and_create_pon_ports_task.apply_async(args=[card.id,], queue='receive_periodic')
             logger.info(f"TASK_discover_and_create_cards: Card discovery completed for OLT: {olt.name}")
         else:
             error_message = board_info_result.get('error', 'Unknown error during card discovery')
@@ -401,7 +404,6 @@ def periodically_update_all_onts_data():
 
 
 @shared_task
-@shared_task
 def update_all_olts_task():
     """
     Task to update all OLTs when the refresh button is clicked.
@@ -559,30 +561,141 @@ def periodically_update_all_olts_metrics():
 @shared_task # Make sure this is a Celery task if it's to be scheduled by Celery Beat
 def periodically_detect_pon_outages():
     """
+    Re-implemented task to detect and record PON port outages.
+    This task checks for two main outage conditions:
+    1. The PON port itself is reported as 'down' or 'offline'.
+    2. The PON port is 'up', but all of its configured ONUs are offline.
+
+    It creates, updates, and resolves PONOutageEvent records accordingly.
+    """
+    logger.info(f"TASK_periodically_detect_pon_outages: Starting PON outage detection...")
+
+    # Get all PON ports on active OLTs, with counts of total and offline ONUs
+    pon_ports = PONPort.objects.filter(card__olt__status='active').annotate(
+        total_onts_count=Count('onus'),
+        offline_onts_count=Count('onus', filter=Q(onus__status__in=['offline', 'los']))
+    ).select_related('card')
+
+    for pon_port in pon_ports:
+        total_onts = pon_port.total_onts_count
+        offline_onts = pon_port.offline_onts_count
+
+        # Normalize PON port status. Assuming 'down' and 'offline' are outage indicators.
+        is_port_down = pon_port.status.lower() in ['down', 'offline']
+
+        # Condition for an outage: Port is down, OR port is up but all ONUs are offline (and there are ONUs).
+        is_outage_condition = is_port_down or (total_onts > 0 and offline_onts == total_onts)
+
+        # Check for an existing active outage for this port
+        active_outage_event = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
+
+        if is_outage_condition:
+            # --- OUTAGE IS ACTIVE ---
+            if not active_outage_event:
+                # This is a NEW outage. Let's create an event.
+                logger.info(f"NEW OUTAGE DETECTED on {pon_port} ({pon_port.card.slot_number}/{pon_port.port_index_on_card}). "
+                            f"Port Status: {pon_port.status}, Offline ONUs: {offline_onts}/{total_onts}.")
+
+                # --- Trace the cause ---
+                possible_cause = "Unknown"
+                if is_port_down:
+                    possible_cause = f"PON Port Down (Status: {pon_port.status})"
+                elif total_onts > 0 and offline_onts == total_onts:
+                    # If port is up but all ONUs are down, check their individual causes
+                    # This query is only run when a new outage is detected.
+                    offline_onu_causes = pon_port.onus.filter(
+                        status__in=['offline', 'los']
+                    ).values_list('last_down_cause', flat=True)
+
+                    causes = {}
+                    for cause in offline_onu_causes:
+                        cause_str = cause or "Unknown Cause"
+                        causes[cause_str] = causes.get(cause_str, 0) + 1
+                    
+                    if causes:
+                        # Find the most common cause among the offline ONUs
+                        most_common_cause = max(causes, key=causes.get)
+                        possible_cause = f"All ONUs Offline (Most common reason: {most_common_cause})"
+                    else:
+                        possible_cause = "All ONUs Offline (Reason unknown)"
+
+                # Create the outage event
+                new_outage = PONOutageEvent.objects.create(
+                    pon_port=pon_port,
+                    affected_ont_count=offline_onts,
+                    possible_cause=possible_cause,
+                    # Trace other data at the time of outage
+                    board_port_description=f"Board: {pon_port.card.slot_number}, Port: {pon_port.port_index_on_card}",
+                    port_tx_power=pon_port.tx_power,
+                    port_rx_power=pon_port.rx_power,
+                )
+
+                logger.info(f"Saved new outage event {new_outage.id} for {pon_port}.")
+                
+                # Send notification for the new outage
+                serializer = PONOutageEventSerializer(new_outage)
+                send_pon_outage_notification('new_outage', serializer.data)
+
+            else:
+                # An outage is ALREADY active. We can update the count if it changed.
+                if active_outage_event.affected_ont_count != offline_onts:
+                    logger.info(f"Updating active outage {active_outage_event.id} for {pon_port}. "
+                                f"Offline ONT count changed from {active_outage_event.affected_ont_count} to {offline_onts}.")
+                    active_outage_event.affected_ont_count = offline_onts
+                    active_outage_event.save(update_fields=['affected_ont_count'])
+
+                    # Send notification for the updated outage
+                    serializer = PONOutageEventSerializer(active_outage_event)
+                    send_pon_outage_notification('updated_outage', serializer.data)
+        else:
+            # --- NO OUTAGE CONDITION ---
+            if active_outage_event:
+                # An outage was active, but the condition is now clear. Let's resolve it.
+                logger.info(f"RESOLVING outage {active_outage_event.id} on {pon_port}. "
+                            f"Port Status: {pon_port.status}, Offline ONUs: {offline_onts}/{total_onts}.")
+                
+                active_outage_event.end_time = timezone.now()
+                active_outage_event.save(update_fields=['end_time'])
+
+                # Send notification for the resolved outage
+                serializer = PONOutageEventSerializer(active_outage_event)
+                send_pon_outage_notification('resolved_outage', serializer.data)
+
+    logger.info(f"TASK_periodically_detect_pon_outages: Finished PON outage detection cycle.")
+
+
+@shared_task
+def old_periodically_detect_pon_outages():
+    """
     Task to detect and record PON port outages based on ONT statuses.
     """
     logger.info(f"TASK_periodically_detect_pon_outages: Starting PON outage detection...")
-    pon_ports = PONPort.objects.filter(card__olt__status='active') # Only check ports on active OLTs
+    # Annotate counts directly in the query to avoid N+1 queries in the loop
+    pon_ports = PONPort.objects.filter(card__olt__status='active').annotate(
+        total_onts_count=Count('onus'),
+        offline_onts_count=Count('onus', filter=Q(onus__status='offline'))
+    ).prefetch_related('onus') # Prefetch for accessing last_down_cause
 
     # Outage detection is now based on PON port status, not recent offline ONTs
     # Define recent_offline_window_minutes or remove its usage if not intended
     recent_offline_window_minutes = getattr(settings, 'RECENT_OFFLINE_WINDOW_MINUTES', 15) # Example: get from settings or default
     for pon_port in pon_ports:
-        total_onts = pon_port.onts.count()
+        total_onts = pon_port.total_onts_count
         if total_onts == 0:
             continue # Cannot detect outage if no ONTs exist
 
         # If the PON port itself is down, trigger outage logic
         if pon_port.status == 'down':
-            offline_onts_qs = pon_port.onts.filter(status='offline')
-            offline_count = offline_onts_qs.count()
+            # Use the annotated count
+            offline_count = pon_port.offline_onts_count
             active_outage_event = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
 
             if offline_count > 0:
                 if not active_outage_event:
                     logger.info(f"TASK_periodically_detect_pon_outages: New PON outage on {pon_port}. {offline_count}/{total_onts} ONTs offline (PON port DOWN).")
                     causes = {}
-                    for ont in offline_onts_qs:
+                    # We still need to iterate here for the cause, but the count is efficient
+                    for ont in pon_port.onus.filter(status='offline'):
                         cause = ont.last_down_cause or 'Unknown Cause'
                         causes[cause] = causes.get(cause, 0) + 1
                     possible_cause = max(causes, key=causes.get) if causes else 'Unknown Cause'
@@ -617,8 +730,8 @@ def periodically_detect_pon_outages():
                     serializer = PONOutageEventSerializer(active_outage_event)
                     send_pon_outage_notification('updated_outage', serializer.data)
             continue
-        # If port is up, use the old logic to resolve outages if all ONTs are online
-        offline_onts_qs = pon_port.onts.filter(status='offline')
+        # If port is up, use the old logic to resolve outages if all ONUs are online
+        offline_onts_qs = pon_port.onus.filter(status='offline')
         offline_count = offline_onts_qs.count()
         active_outage_event = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
         if offline_count == 0 and active_outage_event and pon_port.status != 'down': # Only resolve if port is not 'down'
@@ -630,7 +743,7 @@ def periodically_detect_pon_outages():
             # Continue to next port after resolving
             continue 
 
-        offline_onts_qs = pon_port.onts.filter(status='offline')
+        offline_onts_qs = pon_port.onus.filter(status='offline')
         offline_count = offline_onts_qs.count()
 
         active_outage_event = PONOutageEvent.objects.filter(pon_port=pon_port, end_time__isnull=True).first()
@@ -676,8 +789,6 @@ def periodically_detect_pon_outages():
                     # Send WebSocket notification for updated outage
                     serializer = PONOutageEventSerializer(active_outage_event)
                     send_pon_outage_notification('updated_outage', serializer.data)
-                # else:
-                    # logger.debug(f"TASK_periodically_detect_pon_outages: PON Port {pon_port} - Active outage exists. Affected ONT count ({total_onts}) is the same. No new event trigger.")
 
         else: # offline_count == 0
             # No ONTs are offline on this port.
@@ -690,19 +801,171 @@ def periodically_detect_pon_outages():
                 serializer = PONOutageEventSerializer(active_outage_event)
                 send_pon_outage_notification('resolved_outage', serializer.data)
 
-    logger.info(f"TASK_periodically_detect_pon_outages: Finished PON outage detection cycle.")
+@shared_task
+def record_aggregated_network_status():
+    """
+    Periodically aggregates network data (e.g., from ONU model)
+    and stores it in the NetworkStatusData model for charting.
+    """
+    logger.info("TASK_record_aggregated_network_status: Starting aggregation...")
+    try:
+        total_onus_count = ONU.objects.count()
+        online_onus_count = ONU.objects.filter(status='online').count()
+        offline_onus_count = ONU.objects.filter(status='offline').count()
+        
+        # Example: Count ONUs with specific offline reasons if your model/data supports it well
+        # This requires 'last_down_cause' to be reliably populated and standardized.
+        signal_loss_onus_count = ONU.objects.filter(status='offline', last_down_cause__icontains='los').count() # Example
+        power_failure_onus_count = ONU.objects.filter(status='offline', last_down_cause__icontains='power').count() # Example
 
+        # Determine overall status (simplified example)
+        current_status = 'up'
+        if total_onus_count > 0:
+            online_percentage = (online_onus_count / total_onus_count) * 100
+            if online_percentage < 80: # Example threshold
+                current_status = 'down'
+            elif online_percentage < 95: # Example threshold
+                current_status = 'degraded'
+        elif total_onus_count == 0:
+            current_status = 'maintenance' # Or 'unknown'
 
-# Add this task to your periodic schedule in admin or settings
-# Example using settings.py:
-# CELERY_BEAT_SCHEDULE = {
-#     # ... other tasks ...
-#     'detect-pon-outages-every-5-minutes': {
-#         'task': 'network.tasks.periodically_detect_pon_outages', # Ensure this matches the task name
-#         'schedule': timedelta(minutes=5),
-#     },
-# }
+        # Placeholder for average Rx/Tx power - requires more complex aggregation
+        # avg_rx = ONU.objects.filter(status='online', rx_power_at_olt__isnull=False).aggregate(avg_val=models.Avg('rx_power_at_olt'))['avg_val']
+        # avg_tx = ONU.objects.filter(status='online', tx_power_at_ont__isnull=False).aggregate(avg_val=models.Avg('tx_power_at_ont'))['avg_val']
+
+        NetworkStatusData.objects.create(
+            timestamp=timezone.now(),
+            online_onts=online_onus_count,
+            offline_onts=offline_onus_count,
+            signal_loss_onts=signal_loss_onus_count,
+            power_failure_onts=power_failure_onus_count,
+            total_onts=total_onus_count,
+            status=current_status,
+            # avg_rx_power=avg_rx,
+            # avg_tx_power=avg_tx
+        )
+        logger.info(f"TASK_record_aggregated_network_status: Successfully recorded aggregated network status. Online: {online_onus_count}/{total_onus_count}")
+
+    except Exception as e:
+        logger.error(f"TASK_record_aggregated_network_status: Error during aggregation: {e}", exc_info=True)
 
 
 # celery -A oltmanager worker -l info -P threads
 # celery -A oltmanager beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+
+from .utils.snmp_utils import get_all_ont_details_for_pon_port_async
+
+@shared_task
+def refresh_single_ont_in_pon_port_task(pon_port_id, ont_id):
+    """
+    Celery task to refresh a single ONT in a PONPort.
+    """
+    try:
+        from .models import ONU, PONPort, ONUType
+        pon_port = PONPort.objects.select_related('card__olt').get(id=pon_port_id)
+        card = pon_port.card
+        olt = card.olt
+
+        # Get the ONT object
+        ont = ONU.objects.get(id=ont_id, pon_port=pon_port)
+
+        # Fetch all ONT details for this PON port via SNMP
+        ont_details_snmp = asyncio.run(get_all_ont_details_for_pon_port_async(
+            ip=olt.ip_address,
+            community=olt.snmp_ro_community,
+            slot_num=card.slot_number,
+            port_num=pon_port.port_index_on_card,
+            num_configured_onts=pon_port.configured_onts,
+            snmp_port=olt.snmp_port
+        ))
+
+        # Find the ONT data for the target ONT
+        target_ont_data = None
+        for ont_data in ont_details_snmp:
+            if ont_data.get("serial_number") == ont.serial_number or ont_data.get("ont_index_on_port") == ont.ont_index_on_port:
+                target_ont_data = ont_data
+                break
+
+        if not target_ont_data:
+            logger.warning(f"refresh_single_ont_in_pon_port_task: No SNMP data found for ONT {ont.id} on PONPort {pon_port.id}")
+            return {"status": "not_found", "message": "ONT data not found in SNMP response"}
+
+        # Get or create a default ONUType if needed
+        default_onu_type, _ = ONUType.objects.get_or_create(
+            unique_id="UNKNOWN_DEFAULT", 
+            defaults={'name': 'Unknown Type', 'pon_type': 'GPON', 'image_url': ''}
+        )
+
+        # Update the ONT object
+        ONU.objects.filter(id=ont.id).update(
+            serial_number=target_ont_data.get('serial_number'),
+            status=target_ont_data.get('status'),
+            rx_power_at_ont=target_ont_data.get('rx_power_at_ont'),
+            tx_power_at_ont=target_ont_data.get('tx_power_at_ont'),
+            rx_power_at_olt=target_ont_data.get('rx_power_at_olt'),
+            last_down_time=target_ont_data.get('last_down_time'),
+            last_down_cause=target_ont_data.get('last_down_cause'),
+            onu_type=default_onu_type,
+            last_snmp_update=timezone.now()
+        )
+
+        logger.info(f"refresh_single_ont_in_pon_port_task: Successfully refreshed ONT {ont.id} in PONPort {pon_port.id}")
+        return {"status": "success", "ont_id": ont.id}
+
+    except PONPort.DoesNotExist:
+        logger.error(f"refresh_single_ont_in_pon_port_task: PONPort with id {pon_port_id} not found.")
+        return {"status": "error", "message": "PONPort not found"}
+    except ONU.DoesNotExist:
+        logger.error(f"refresh_single_ont_in_pon_port_task: ONU with id {ont_id} not found in PONPort {pon_port_id}.")
+        return {"status": "error", "message": "ONT not found"}
+    except Exception as e:
+        logger.error(f"refresh_single_ont_in_pon_port_task: Error for ONT {ont_id} in PONPort {pon_port_id}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+@shared_task
+def discover_unconfigured_onts_task(olt_id):
+    """
+    Task to discover unconfigured ONTs on an OLT
+    """
+    try:
+        olt = OLT.objects.get(id=olt_id)
+        discoverer = ONTDiscovery(
+            host=olt.ip_address,
+            username=olt.telnet_username,
+            password=olt.telnet_password
+        )
+        
+        discovered_onts = asyncio.run(discoverer.discover_onts())
+        
+        for ont in discovered_onts:
+            UnconfiguredONT.objects.update_or_create(
+                serial_number=ont['serial_number'],
+                olt=olt,
+                defaults={
+                    'vendor_id': ont['vendor_id'],
+                    'frame': ont['position']['frame'],
+                    'slot': ont['position']['slot'],
+                    'port': ont['position']['port'],
+                    'status': 'discovered'
+                }
+            )
+        
+        return {
+            'status': 'success',
+            'discovered_count': len(discovered_onts)
+        }
+    except Exception as e:
+        logger.error(f"Error discovering ONTs for OLT {olt_id}: {e}", exc_info=True)
+        return {
+            'status': 'error',
+            'error': str(e)
+        }
+
+@shared_task(name='network.tasks.check_for_new_onts')
+def check_for_new_onts():
+    """
+    Periodic task to check for new ONTs on all active OLTs
+    """
+    active_olts = OLT.objects.filter(status='active')
+    for olt in active_olts:
+        discover_unconfigured_onts_task.delay(olt.id)

@@ -3,7 +3,7 @@ Django settings for oltmanager project.
 """
 
 from pathlib import Path
-
+from celery.schedules import crontab
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -15,6 +15,10 @@ DEBUG = True
 
 ALLOWED_HOSTS = ["192.168.200.82","127.0.0.1","localhost","10.120.120.38","160.119.126.248"]
 
+# CORS settings
+CORS_ALLOW_ALL_ORIGINS = True  # For development only
+CORS_ALLOW_CREDENTIALS = True
+
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -24,10 +28,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'django_filters',
     'django_celery_beat',
     'channels',
     'corsheaders',
     'network',
+    
 ]
 
 MIDDLEWARE = [
@@ -155,37 +161,38 @@ CELERY_IMPORTS = ('network.tasks',)  # Explicitly import tasks module
 
 # Celery Beat Settings (if you want to store schedules in the database with django-celery-beat)
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+# In your Django settings.py
+CELERY_WORKER_CANCEL_LONG_RUNNING_TASKS_ON_CONNECTION_LOSS = True
+from celery.schedules import crontab # For more complex schedules, or use timedelta
+
 CELERY_BEAT_SCHEDULE = {
-    'update-onts-every-hour': {
-        'task': 'network.tasks.update_all_onts_task',
-        'schedule': 3600.0,  # Run every hour
-    },
-    'periodically-update-onts': {
+    'periodically-update-all-onts-data-every-5-minutes': {
         'task': 'network.tasks.periodically_update_all_onts_data',
-        'schedule': 30.0,  # Run every 30 seconds
-        'options': {
-            'expires': 25.0,  # Task expires after 25 seconds
-            'time_limit': 25,  # Hard time limit of 25 seconds
-        },
+        'schedule': 600,  # 300 seconds = 5 minutes
+        'options': {'queue': 'receive_periodic'},  # Specify the queue
     },
-    # Add more tasks as needed
-    'update-olt-metrics-every-hour': {
-        'task': 'network.tasks.update_olt_system_metrics_task',
-        'schedule': 3600.0,  # Run every hour
+    'periodically-check-all-olts-reachability-every-5-minutes': {
+        'task': 'network.tasks.periodically_check_all_olts_reachability',
+        'schedule': 300.0,  # 300 seconds = 5 minutes
+        'options': {'queue': 'receive_periodic'},  # Specify the queue
     },
-    'update-olt-reachability-every-hour': {
-        'task': 'network.tasks.check_olt_reachability_task',
-        'schedule': 3600.0,  # Run every hour
+    'periodically-update-all-olts-metrics-every-5-minutes': {
+        'task': 'network.tasks.periodically_update_all_olts_metrics',
+        'schedule': 1200,  # 300 seconds = 5 minutes
+        'options': {'queue': 'receive_periodic'},  # Specify the queue
     },
-    'update-onts-metrics-every-hour': {
-        'task': 'network.tasks.update_onts_metrics_task',
-        'schedule': 3600.0,  # Run every hour
+    'periodically-detect-pon-outages-every-5-minutes': {
+        'task': 'network.tasks.periodically_detect_pon_outages',
+        'schedule': 1200,  # 300 seconds = 5 minutes
+        'options': {'queue': 'receive_periodic'},  # Specify the queue
     },
-    'update-olt-reachability-every-hour': {
-        'task': 'network.tasks.check_olt_reachability_task',
-        'schedule': 3600.0,  # Run every hour
+    'record-aggregated-network-status-every-5-minutes': {
+        'task': 'network.tasks.record_aggregated_network_status',
+        'schedule': 300.0,  # 300 seconds = 5 minutes
+        'options': {'queue': 'receive_periodic'},  # Specify the queue
     },
 }
+
 # Logging Configuration for Development
 LOGGING = {
     'version': 1,
@@ -236,3 +243,5 @@ CHANNEL_LAYERS = {
         },
     },
 }
+
+# settings.py

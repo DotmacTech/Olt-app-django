@@ -90,15 +90,13 @@ Description=Celery Default Worker Service
 After=network.target
 
 [Service]
-Type=forking
+Type=simple
 User=devserver
 Group=devserver
 WorkingDirectory=/home/devserver/Olt-app-django
 Environment="DJANGO_SETTINGS_MODULE=oltmanager.settings"
 Environment="PYTHONPATH=/home/devserver/Olt-app-django"
-ExecStart=/home/devserver/Olt-app-django/venv/bin/celery multi start default -A oltmanager --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-default.log
-ExecStop=/home/devserver/Olt-app-django/venv/bin/celery multi stopwait default --pidfile=/home/devserver/Olt-app-django/celery-default.pid
-ExecReload=/home/devserver/Olt-app-django/venv/bin/celery multi restart default -A oltmanager --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-default.log
+ExecStart=/home/devserver/Olt-app-django/venv/bin/celery -A oltmanager worker --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-default.log -Q default
 Restart=always
 
 [Install]
@@ -113,19 +111,17 @@ sudo nano /etc/systemd/system/celery-periodic.service
 
 ```ini
 [Unit]
-Description=Celery Periodic Worker Service
+Description=Celery Worker Periodic Service
 After=network.target
 
 [Service]
-Type=forking
+Type=simple
 User=devserver
 Group=devserver
 WorkingDirectory=/home/devserver/Olt-app-django
 Environment="DJANGO_SETTINGS_MODULE=oltmanager.settings"
 Environment="PYTHONPATH=/home/devserver/Olt-app-django"
-ExecStart=/home/devserver/Olt-app-django/venv/bin/celery multi start periodic -A oltmanager --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-periodic.log
-ExecStop=/home/devserver/Olt-app-django/venv/bin/celery multi stopwait periodic --pidfile=/home/devserver/Olt-app-django/celery-periodic.pid
-ExecReload=/home/devserver/Olt-app-django/venv/bin/celery multi restart periodic -A oltmanager --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-periodic.log
+ExecStart=/home/devserver/Olt-app-django/venv/bin/celery -A oltmanager worker --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-periodic.log -Q periodic
 Restart=always
 
 [Install]
@@ -138,21 +134,19 @@ WantedBy=multi-user.target
 sudo nano /etc/systemd/system/celery-receive.service
 ```
 
-```ini
+```ini                                                                             
 [Unit]
-Description=Celery Worker for 'receive_periodic' Queue
+Description=Celery Worker Receive Periodic Service
 After=network.target
 
 [Service]
-Type=forking
+Type=simple
 User=devserver
 Group=devserver
 WorkingDirectory=/home/devserver/Olt-app-django
 Environment="DJANGO_SETTINGS_MODULE=oltmanager.settings"
 Environment="PYTHONPATH=/home/devserver/Olt-app-django"
-ExecStart=/home/devserver/Olt-app-django/venv/bin/celery multi start receive_periodic -A oltmanager --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-receive.log
-ExecStop=/home/devserver/Olt-app-django/venv/bin/celery multi stopwait receive_periodic --pidfile=/home/devserver/Olt-app-django/celery-receive.pid
-ExecReload=/home/devserver/Olt-app-django/venv/bin/celery multi restart receive_periodic -A oltmanager --pidfile=/home/devserver/Olt-app-django/celery-receive.pid --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-receive.log
+ExecStart=/home/devserver/Olt-app-django/venv/bin/celery -A oltmanager worker --loglevel=INFO --logfile=/home/devserver/Olt-app-django/logs/celery-receive-periodic.log -Q receive_periodic
 Restart=always
 
 [Install]

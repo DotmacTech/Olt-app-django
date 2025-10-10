@@ -140,6 +140,7 @@ class PONOutageConsumer(AsyncWebsocketConsumer):
 
     # Receive message from room group (triggered by group_send)
     async def outage_event(self, event_dict):
+        logger.info(f"PONOutageConsumer.outage_event: Received event: {event_dict}")
         # This method name 'outage_event' corresponds to the 'type' in group_send:
         # e.g., {'type': 'outage.event', 'event_type': ..., 'data': ...}
         # The part after the dot ('event') is used if the 'type' has a dot.
@@ -150,7 +151,7 @@ class PONOutageConsumer(AsyncWebsocketConsumer):
         # Let's assume group_send uses 'type': 'outage.message'
         # and this method is outage_message
         message_content = {
-            'type': event_dict['event_type'], # e.g., 'new_outage', 'updated_outage', 'resolved_outage'
+            'type': event_dict['event_type'],  # e.g., 'new_outage', 'updated_outage', 'resolved_outage'
             'data': event_dict['data']
         }
         # Send message to WebSocket

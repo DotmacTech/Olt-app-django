@@ -72,6 +72,13 @@ def setup_periodic_tasks(sender: Celery, **kwargs):
         name='detect pon outages every 5 mins',
     )
 
+    # Add ONT discovery task
+    sender.add_periodic_task(
+        300.0,  # Run every 5 minutes
+        check_for_new_onts.s(),
+        name='check for new ONTs'
+    )
+
 # Optional: If you want to see what tasks are loaded
 # print(f"Celery tasks: {app.tasks.keys()}")
 

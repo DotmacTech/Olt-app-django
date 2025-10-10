@@ -29,6 +29,7 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+// import NetworkStatusChart from '../components/NetworkStatusChart';
 import SignalCellularAltIcon from '@mui/icons-material/SignalCellularAlt';
 import { format, formatDistanceToNow, subHours, subDays, subYears } from 'date-fns';
 import { Line } from 'react-chartjs-2';
@@ -96,6 +97,192 @@ const getStatusColor = (status) => {
       return 'text.secondary';
   }
 };
+
+const NetworkStatusChart = () => {
+  const [chartData, setChartData] = useState({
+    datasets: [],
+  });
+  const [timeFrame, setTimeFrame] = useState('24h'); // Default to 24 hours
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const timeFrameOptions = [
+    { value: '1h', label: 'Last Hour' },
+    { value: '24h', label: 'Last 24 Hours' },
+    { value: '7d', label: 'Last 7 Days' },
+    { value: '30d', label: 'Last 30 Days' },
+    // { value: '1y', label: 'Last Year' }, // Add if backend supports yearly aggregation
+  ];
+
+
+  // Process data for the chart
+  // e.g., [{ timestamp: "2023-10-27T10:00:00Z", online_onts: 150, offline_onts: 5, ... }, ...]
+  // We'll plot 'online_onts' as the 'value' for this example.
+  const processDataForChart = (apiData) => {
+    if (!Array.isArray(apiData) || apiData.length === 0) {
+      return { datasets: [] }; // Return empty datasets, not labels and datasets separately
+    }
+
+    // Sort data by timestamp just in case it's not sorted (though API should sort by -timestamp)
+    // For Chart.js time scale, it's better if data is sorted chronologically.
+    const sortedData = [...apiData].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    return {
+      datasets: [
+        {
+          label: 'Online ONTs', // Updated label
+          data: sortedData.map(item => ({ x: new Date(item.timestamp), y: item.online_onts })), // Use item.online_onts
+          fill: false,
+          borderColor: 'rgb(75, 192, 192)',
+          tension: 0.1,
+        },
+        {
+          label: 'Offline ONTs',
+          data: sortedData.map(item => ({ x: new Date(item.timestamp), y: item.offline_onts })),
+          fill: false,
+          borderColor: 'rgb(255, 99, 132)',
+          tension: 0.1,
+        },
+        {
+          label: 'LOS ONTs', // Added LOS dataset
+          data: sortedData.map(item => ({ x: new Date(item.timestamp), y: item.signal_loss_onts })), // Assumes item.los_onts exists
+          fill: false,
+          borderColor: 'rgb(255, 205, 86)', // Example color: yellow
+          tension: 0.1,
+        },
+      ],
+    };
+  };
+
+  const fetchData = useCallback(async () => {
+    try {
+      setIsLoading(true); // Set loading true at the start of fetch
+      const response = await getNetworkStatus(timeFrame); // Pass the selected timeFrame
+      // The ViewSet is paginated by default. getNetworkStatus might need to handle pagination
+      // or the API endpoint should provide an unpaginated version for the chart, or accept a limit.
+      // For now, assuming response.results if paginated, or response directly if not.
+      const dataToProcess = response.results || response; 
+      setChartData(processDataForChart(dataToProcess));
+      setError(null);
+    } catch (err) {
+      console.error('Failed to fetch network status:', err);
+      setError('Failed to load chart data. Please try again later.');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [timeFrame]); // Add timeFrame as a dependency
+
+  useEffect(() => {
+    fetchData(); // Initial fetch
+
+    const intervalId = setInterval(fetchData, 60000); // Poll every 60 seconds
+
+    return () => clearInterval(intervalId);
+  }, [fetchData]); // fetchData is now a dependency
+
+  const getChartOptions = useCallback((selectedTimeFrame) => {
+    let unit = 'hour';
+    let tooltipFormat = 'PPpp'; // Default: Jan 1, 2023, 12:00:00 PM
+    let displayFormat = 'MMM d, HH:mm';
+
+    switch (selectedTimeFrame) {
+      case '1h':
+        unit = 'minute';
+        tooltipFormat = 'p'; // 12:00 PM
+        displayFormat = 'HH:mm'; // Display format for axis labels
+        break;
+      case '24h':
+        unit = 'hour';
+        tooltipFormat = 'MMM d, h a'; // Jan 1, 12 PM
+        displayFormat = 'HH:00';
+        break;
+      case '7d':
+        unit = 'day';
+        tooltipFormat = 'MMM d'; // Jan 1
+        displayFormat = 'MMM d';
+        break;
+      case '30d':
+        unit = 'day';
+        tooltipFormat = 'MMM d'; // Jan 1
+        displayFormat = 'MMM d';
+        break;
+      case '1y':
+        unit = 'month';
+        tooltipFormat = 'MMM yyyy'; // Jan 2023
+        displayFormat = 'MMM yyyy';
+        break;
+      default:
+        unit = 'hour';
+        displayFormat = 'MMM d, HH:00';
+    }
+
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top' },
+        title: { display: true, text: 'Network Status - ONTs Over Time' },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: {
+            unit: unit,
+            tooltipFormat: tooltipFormat,
+            displayFormats: { // Customize how labels are displayed on the axis
+              minute: 'HH:mm', // e.g., 14:30
+              hour: 'HH:00',   // e.g., 14:00
+              day: 'MMM d',    // e.g., Jan 15
+              month: 'MMM yyyy'// e.g., Jan 2023
+            }
+          },
+          title: { display: true, text: 'Time' },
+        },
+        y: { beginAtZero: true, title: { display: true, text: 'Number of ONTs' } },
+      },
+    };
+  }, []);
+
+  const chartOptions = getChartOptions(timeFrame);
+
+  if (error) return <div style={{ color: 'red', padding: '20px' }}>Error: {error}</div>;
+  // if (isLoading && (!chartData.datasets || chartData.datasets.length === 0)) return <div>Loading chart data...</div>;
+
+  return (
+    <Box>
+      <FormControl size="small" sx={{ minWidth: 180, mb: 2 }}>
+        <InputLabel id="time-frame-select-label">Time Frame</InputLabel>
+        <Select
+          labelId="time-frame-select-label"
+          value={timeFrame}
+          label="Time Frame"
+          onChange={(e) => setTimeFrame(e.target.value)}
+        >
+          {timeFrameOptions.map(option => (
+            <MenuItem key={option.value} value={option.value}>
+              {option.label}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+      {isLoading && (!chartData.datasets || chartData.datasets.length === 0) ? (
+        <Box display="flex" justifyContent="center" alignItems="center" sx={{ height: 300 }}>
+          <CircularProgress />
+          <Typography sx={{ ml: 2 }}>Loading chart data...</Typography>
+        </Box>
+      ) : (
+        <Box sx={{ height: { xs: 300, sm: 350, md: 400 } }}> {/* Responsive height */}
+          <Line options={chartOptions} data={chartData} />
+        </Box>
+      )}
+    </Box>
+  );
+};
+
+
+
+
+
 
 // NetworkStatusGraph component to display ONT status metrics
 const NetworkStatusGraph = () => {
@@ -658,8 +845,12 @@ const DashboardPage = () => {
     summary: false,
     outages: false,
     networkStatus: false,
-    all: false
+    all: false,
+    allOlts: false, // Added for "Refresh All OLTs"
+    allOnts: false, // Added for "Refresh All ONTs"
   });
+  
+
   
   // Helper function to get CSRF token
   const getCookie = (name) => {
@@ -813,6 +1004,12 @@ const DashboardPage = () => {
       if (component === 'all' || component === 'networkStatus') {
         promises.push(fetchNetworkStatus());
       }
+      if (component === 'all_olts') { // Handle 'all_olts'
+        promises.push(refreshAllOlts());
+      }
+      if (component === 'all_onts') { // Handle 'all_onts'
+        promises.push(refreshAllOnts());
+      }
       
       await Promise.all(promises);
       setError(null);
@@ -832,10 +1029,19 @@ const DashboardPage = () => {
     }));
     
     try {
-      await fetchData(component);
+      let refreshMessage = `Successfully refreshed ${component === 'all' ? 'all data' : component}`;
+      if (component === 'all_olts') {
+        await refreshAllOlts(); // Call the specific refresh function
+        refreshMessage = 'Successfully initiated OLTs refresh.';
+      } else if (component === 'all_onts') {
+        await refreshAllOnts(); // Call the specific refresh function
+        refreshMessage = 'Successfully initiated ONTs refresh.';
+      } else {
+        await fetchData(component); // Existing logic for other components
+      }
       setSnackbar({
         open: true,
-        message: `Successfully refreshed ${component === 'all' ? 'all data' : component}`,
+        message: refreshMessage,
         severity: 'success'
       });
     } catch (error) {
@@ -1030,11 +1236,8 @@ const DashboardPage = () => {
                     </Tooltip>
                   </Box>
                 </Box>
-                <NetworkStatusGraph 
-                  statusData={networkStatusData} 
-                  loading={refreshing.networkStatus}
-                  error={networkStatusError}
-                />
+                {/* Render the NetworkStatusChart component */}
+                <NetworkStatusChart />
               </CardContent>
             </Card>
           </Grid>
@@ -1043,6 +1246,30 @@ const DashboardPage = () => {
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
           <Typography variant="h5">Network Overview</Typography>
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Tooltip title="Refresh all OLTs (metrics, inventory)">
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => handleRefresh('all_olts')}
+                disabled={refreshing.allOlts || refreshing.all}
+                startIcon={<RefreshIcon />}
+                sx={{ minWidth: 140 }}
+              >
+                {refreshing.allOlts ? 'Refreshing OLTs...' : 'Refresh All OLTs'}
+              </Button>
+            </Tooltip>
+            <Tooltip title="Refresh all ONTs across all PON ports">
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => handleRefresh('all_onts')}
+                disabled={refreshing.allOnts || refreshing.all}
+                startIcon={<RefreshIcon />}
+                sx={{ minWidth: 140 }}
+              >
+                {refreshing.allOnts ? 'Refreshing ONTs...' : 'Refresh All ONTs'}
+              </Button>
+            </Tooltip>
             <Tooltip title="Refresh all ONTs">
               <Button 
                 variant="outlined"

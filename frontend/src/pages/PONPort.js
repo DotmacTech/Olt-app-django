@@ -3,48 +3,21 @@ import { useParams, Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, CircularProgress, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton,
-  Breadcrumbs, Link, Chip, Button, Snackbar
+  Breadcrumbs, Link, Chip, Button, Snackbar, Tooltip
 } from '@mui/material';
 import { Home as HomeIcon, Cable as CableIcon, SettingsInputSvideo as SlotIcon, Refresh as RefreshIcon, Router as RouterIcon, ArrowBack as ArrowBackIcon, Visibility as VisibilityIcon } from '@mui/icons-material';
+import SettingsIcon from '@mui/icons-material/Settings';
+import DeleteIcon from '@mui/icons-material/Delete';
+import SignalCellularAltIcon from '@mui/icons-material/SignalCellularAlt';
 import { getPonPortDetailsForSlot, triggerPonPortRefresh, getOLTDetails } from '../services/api';
 
 
 
 function PONPort() {
   const { oltId, slotNumber } = useParams(); // Get OLT ID and Slot Number from URL
-  // ...existing state declarations...
+  const navigate = useNavigate();
 
-  // Auto-refresh every 1 minute using polling
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetch('http://localhost:8000/api/olts/9/slot/2/pon-port-details/')
-        .then(async res => {
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`HTTP ${res.status}: ${text}`);
-          }
-          const text = await res.text();
-          try {
-            const data = JSON.parse(text);
-            if (Array.isArray(data)) {
-              setPonPorts(data);
-              setLastUpdated(new Date());
-              showNotification('PON port data auto-refreshed.', 'info');
-            } else {
-              showNotification('Auto-refresh failed: invalid data format.', 'error');
-            }
-          } catch (jsonErr) {
-            console.error('Auto-refresh JSON parse error:', jsonErr, 'Raw response:', text);
-            showNotification('Auto-refresh failed: invalid JSON response.', 'error');
-          }
-        })
-        .catch(err => {
-          showNotification('Auto-refresh failed: ' + (err?.message || 'Unknown error'), 'error');
-        });
-    }, 60000); // 1 minute
-    return () => clearInterval(interval);
-  }, []);
-  // (Moved to top)
+  // State declarations should be at the top of the component
   const [ponPorts, setPonPorts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -52,12 +25,11 @@ function PONPort() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
   const [oltName, setOltName] = useState('');
-  const navigate = useNavigate();
 
-
-  const showNotification = (message, severity = 'info') => {
+  // Callback and function declarations
+  const showNotification = useCallback((message, severity = 'info') => {
     setNotification({ open: true, message, severity });
-  };
+  }, []);
 
   const handleCloseNotification = (event, reason) => {
     if (reason === 'clickaway') {
@@ -108,7 +80,34 @@ function PONPort() {
     } finally {
       setLoading(false);
     }
-  }, [oltId, slotNumber]); // Removed lastUpdated from dependencies here
+  }, [oltId, slotNumber, showNotification]); // Add showNotification to dependency array
+
+  // Effect hooks should come after state and callback declarations
+  // Auto-refresh every 1 minute using polling
+  useEffect(() => {
+    // Do not start polling if we don't have the necessary IDs
+    if (!oltId || !slotNumber) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      // Use the dynamic API function instead of a hardcoded fetch.
+      getPonPortDetailsForSlot(oltId, slotNumber)
+        .then(data => {
+          if (Array.isArray(data)) {
+            setPonPorts(data);
+            setLastUpdated(new Date());
+            showNotification('PON port data auto-refreshed.', 'info');
+          } else {
+            showNotification('Auto-refresh failed: invalid data format.', 'error');
+          }
+        })
+        .catch(err => {
+          showNotification('Auto-refresh failed: ' + (err?.message || 'Unknown error'), 'error');
+        });
+    }, 60000); // 1 minute
+    return () => clearInterval(interval);
+  }, [oltId, slotNumber, showNotification]); // Add dependencies to re-create interval if URL params change
 
   useEffect(() => {
     fetchOltName();
@@ -165,20 +164,24 @@ function PONPort() {
           </Typography>
         </Breadcrumbs>
       </Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h5">
-        PON Ports - OLT: {oltName || oltId}, Slot: {slotNumber}
-          {lastUpdated && !loading && ( <Typography variant="caption" sx={{ ml: 2 }}>Client Last Fetched: {lastUpdated.toLocaleTimeString()}</Typography> )}
-        </Typography>
-        <Button
-          variant="contained"
-          onClick={handleRefresh}
-          disabled={isRefreshing || loading}
-          startIcon={isRefreshing ? <CircularProgress size={20} color="inherit" /> : <RefreshIcon />}
-        >
-          {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
+      <Box sx={{ mb: 2, display: 'flex', gap: 2 }}>
+        <Button variant="contained" color="primary" onClick={handleRefresh} disabled={isRefreshing || loading}>
+          Refresh PON ports info
+        </Button>
+        <Button variant="contained" color="primary">
+          Enable all PON ports
+        </Button>
+        <Button variant="contained" color="primary">
+          Enable Autoind
+        </Button>
+        <Button variant="contained" color="error">
+          Reboot all ONUs
         </Button>
       </Box>
+      <Typography variant="h6" sx={{ mb: 2 }}>
+        OLT: {oltName || oltId}, Slot: {slotNumber}
+          {lastUpdated && !loading && ( <Typography variant="caption" sx={{ ml: 2 }}>Client Last Fetched: {lastUpdated.toLocaleTimeString()}</Typography> )}
+        </Typography>
       <Paper sx={{ p: 3 }}>
         {loading ? (
           <Box display="flex" justifyContent="center" alignItems="center" minHeight={120}>
@@ -193,46 +196,62 @@ function PONPort() {
             <Table stickyHeader>
               <TableHead>
                 <TableRow>
-                  <TableCell>Port ID</TableCell>
-                  <TableCell>Description</TableCell>
+                  <TableCell>Port</TableCell>
+                  <TableCell>Type</TableCell>
+                  <TableCell>Admin state</TableCell>
                   <TableCell>Status</TableCell>
-                  <TableCell>Configured ONTs</TableCell>
-                  <TableCell>Online ONTs</TableCell>
-                  <TableCell>TX Power (dBm)</TableCell>
-                  <TableCell>RX Power (dBm)</TableCell>
-                  <TableCell>Last Update</TableCell>
-                  <TableCell align="center">Actions</TableCell>
+                  <TableCell>ONUs</TableCell>
+                  <TableCell>Average signal</TableCell>
+                  <TableCell>Description</TableCell>
+                  <TableCell>Range</TableCell>
+                  <TableCell>TX Power</TableCell>
+                  <TableCell>Action</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {ponPorts.map((port, index) => (
                   <TableRow key={port.port_id !== undefined ? port.port_id : index}>
                     <TableCell>{port.port_index_on_card}</TableCell>
-                    <TableCell>{port.description}</TableCell>
+                    <TableCell>N/A</TableCell>
+                    <TableCell>N/A</TableCell>
                     <TableCell>{getStatusChip(port.status)}</TableCell>
                     <TableCell>
                       <Link
                         component={RouterLink}
                         to={`/olts/${oltId}/slot/${slotNumber}/ponport/${port.id}/onts`}
-                        sx={{ cursor: 'pointer', textDecoration: port.configured_onts > 0 ? 'underline' : 'none', color: port.configured_onts > 0 ? 'primary.main' : 'text.secondary' }}
-                        onClick={(e) => { if (port.configured_onts === 0) e.preventDefault(); }} // Prevent navigation if 0
+                        sx={{ cursor: 'pointer', textDecoration: port.online_onts > 0 ? 'underline' : 'none', color: port.online_onts > 0 ? 'primary.main' : 'text.secondary' }}
+                        onClick={(e) => { if (port.online_onts === 0) e.preventDefault(); }} // Prevent navigation if 0
                       >
-                        {port.configured_onts}
+                        Online: {port.online_onts}
                       </Link>
                     </TableCell>
-                    <TableCell>{port.online_onts}</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        {port.rx_power !== null && port.rx_power !== undefined ? port.rx_power.toFixed(2) : 'N/A'} dB
+                        <SignalCellularAltIcon color="primary" />
+                      </Box>
+                    </TableCell>
+                    <TableCell>{port.description}</TableCell>
+                    <TableCell>N/A</TableCell>
                     <TableCell>{port.tx_power !== null && port.tx_power !== undefined ? port.tx_power.toFixed(2) : 'N/A'}</TableCell>
-                    <TableCell>{port.rx_power !== null && port.rx_power !== undefined ? port.rx_power.toFixed(2) : 'N/A'}</TableCell>
-                    <TableCell>{port.last_snmp_update ? new Date(port.last_snmp_update).toLocaleString() : 'N/A'}</TableCell>
-                    <TableCell align="center">
-                      <Button
-                        variant="outlined"
-                        size="small"
-                        onClick={() => navigate(`/olts/${oltId}/slot/${slotNumber}/ponport/${port.id}/onts`)}
-                        startIcon={<VisibilityIcon />}
-                      >
-                        View ONTs
-                      </Button>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <Tooltip title="Configure">
+                          <IconButton size="small" color="primary">
+                            <SettingsIcon />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Reboot ONUs">
+                          <IconButton size="small" color="error">
+                            <DeleteIcon />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="View ONTs">
+                          <IconButton size="small" onClick={() => navigate(`/olts/${oltId}/slot/${slotNumber}/ponport/${port.id}/onts`)}>
+                            <VisibilityIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -241,28 +260,16 @@ function PONPort() {
           </TableContainer>
         )}
       </Paper>
-        {/* // Temporary test */}
-        <Snackbar
-          open={notification.open}
-          autoHideDuration={6000}
-          onClose={handleCloseNotification}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        >
-          <div>{notification.message || "Test Message"}</div>
-        </Snackbar>
-      {/* 
-        // This is the properly commented out section
-        <Snackbar
-          open={notification.open}
-          autoHideDuration={6000}
-          onClose={handleCloseNotification}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        >
-          <Alert onClose={handleCloseNotification} severity={notification.severity} sx={{ width: '100%' }}>
-            {notification.message}
-          </Alert> 
-        </Snackbar> 
-      */}
+      <Snackbar
+        open={notification.open}
+        autoHideDuration={6000}
+        onClose={handleCloseNotification}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert onClose={handleCloseNotification} severity={notification.severity} sx={{ width: '100%' }}>
+          {notification.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

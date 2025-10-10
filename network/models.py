@@ -83,17 +83,17 @@ class OLT(models.Model):
     def get_total_cards(self):
         return self.cards.count()
 
-    # def get_total_pon_ports(self):
-    #     return self.pon_ports.count()
+    def get_total_pon_ports(self):
+        return sum(card.pon_ports.count() for card in self.cards.all())
 
-    # def get_total_uplink_ports(self):
-    #     return self.uplink_ports.count()
+    def get_total_uplink_ports(self):
+        return self.uplink_ports.count()
 
-    # def get_total_vlans(self):
-    #     return self.vlans.count()
+    def get_total_vlans(self):
+        return self.vlans.count()
 
-    # def get_active_onus(self):
-    #     return sum(port.onus.filter(status='active').count() for port in self.pon_ports.all())
+    def get_active_onus(self):
+        return sum(port.onus.filter(status='online').count() for card in self.cards.all() for port in card.pon_ports.all())
 
 class Card(models.Model):
     olt = models.ForeignKey(OLT, on_delete=models.CASCADE, related_name='cards')
@@ -128,6 +128,11 @@ class PONPort(models.Model):
 
     def __str__(self):
         return f"{self.card.olt.name} - Card {self.card.slot_number} - Port {self.port_index_on_card}"
+
+    @property
+    def slot_port_display(self):
+        """Returns a string like 'Slot 1 / Port 5' for display purposes."""
+        return f"Slot {self.card.slot_number} / Port {self.port_index_on_card}"
 
 class UplinkPort(models.Model):
     olt = models.ForeignKey(OLT, on_delete=models.CASCADE, related_name='uplink_ports')
@@ -300,50 +305,50 @@ class SpeedProfile(models.Model):
         # Add any validation or pre-save logic here
         super().save(*args, **kwargs)
 
-class NetworkStatus(models.Model):
-    """Tracks the status of various network components."""
-    STATUS_CHOICES = [
-        ('up', 'Up'),
-        ('down', 'Down'),
-        ('degraded', 'Degraded'),
-        ('maintenance', 'Maintenance'),
-    ]
+# class NetworkStatus(models.Model):
+#     """Tracks the status of various network components."""
+#     STATUS_CHOICES = [
+#         ('up', 'Up'),
+#         ('down', 'Down'),
+#         ('degraded', 'Degraded'),
+#         ('maintenance', 'Maintenance'),
+#     ]
     
-    name = models.CharField(max_length=100, unique=True, help_text="Name of the network component")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='up')
-    last_checked = models.DateTimeField(auto_now=True)
-    response_time = models.FloatField(null=True, blank=True, help_text="Response time in milliseconds")
-    uptime = models.FloatField(default=100.0, help_text="Uptime percentage")
-    component_type = models.CharField(max_length=50, help_text="Type of network component")
-    ip_address = models.GenericIPAddressField(blank=True, null=True)
-    location = models.CharField(max_length=200, blank=True, null=True)
-    notes = models.TextField(blank=True, null=True)
-    is_monitored = models.BooleanField(default=True)
-    last_status_change = models.DateTimeField(auto_now_add=True)
+#     name = models.CharField(max_length=100, unique=True, help_text="Name of the network component")
+#     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='up')
+#     last_checked = models.DateTimeField(auto_now=True)
+#     response_time = models.FloatField(null=True, blank=True, help_text="Response time in milliseconds")
+#     uptime = models.FloatField(default=100.0, help_text="Uptime percentage")
+#     component_type = models.CharField(max_length=50, help_text="Type of network component")
+#     ip_address = models.GenericIPAddressField(blank=True, null=True)
+#     location = models.CharField(max_length=200, blank=True, null=True)
+#     notes = models.TextField(blank=True, null=True)
+#     is_monitored = models.BooleanField(default=True)
+#     last_status_change = models.DateTimeField(auto_now_add=True)
     
-    # Additional metrics
-    cpu_usage = models.FloatField(null=True, blank=True, help_text="CPU usage percentage")
-    memory_usage = models.FloatField(null=True, blank=True, help_text="Memory usage percentage")
-    disk_usage = models.FloatField(null=True, blank=True, help_text="Disk usage percentage")
+#     # Additional metrics
+#     cpu_usage = models.FloatField(null=True, blank=True, help_text="CPU usage percentage")
+#     memory_usage = models.FloatField(null=True, blank=True, help_text="Memory usage percentage")
+#     disk_usage = models.FloatField(null=True, blank=True, help_text="Disk usage percentage")
     
-    # Network specific metrics
-    bandwidth_usage = models.FloatField(null=True, blank=True, help_text="Bandwidth usage percentage")
-    packet_loss = models.FloatField(null=True, blank=True, help_text="Packet loss percentage")
+#     # Network specific metrics
+#     bandwidth_usage = models.FloatField(null=True, blank=True, help_text="Bandwidth usage percentage")
+#     packet_loss = models.FloatField(null=True, blank=True, help_text="Packet loss percentage")
     
-    class Meta:
-        verbose_name_plural = 'Network Statuses'
-        ordering = ['component_type', 'name']
+#     class Meta:
+#         verbose_name_plural = 'Network Statuses'
+#         ordering = ['component_type', 'name']
     
-    def __str__(self):
-        return f"{self.name} ({self.get_status_display()})"
+#     def __str__(self):
+#         return f"{self.name} ({self.get_status_display()})"
     
-    def save(self, *args, **kwargs):
-        # Update last_status_change if status changed
-        if self.pk:
-            old_status = NetworkStatus.objects.get(pk=self.pk).status
-            if old_status != self.status:
-                self.last_status_change = timezone.now()
-        super().save(*args, **kwargs)
+#     def save(self, *args, **kwargs):
+#         # Update last_status_change if status changed
+#         if self.pk:
+#             old_status = NetworkStatus.objects.get(pk=self.pk).status
+#             if old_status != self.status:
+#                 self.last_status_change = timezone.now()
+#         super().save(*args, **kwargs)
 
 class PONOutageEvent(models.Model):
     """
@@ -355,7 +360,12 @@ class PONOutageEvent(models.Model):
     # Store a summary or count of affected ONTs at the time of detection
     affected_ont_count = models.PositiveIntegerField(default=0)
     # Store the most common detected cause among affected ONTs
-    possible_cause = models.CharField(max_length=100, null=True, blank=True)
+    possible_cause = models.CharField(max_length=255, null=True, blank=True)
+
+    # --- New fields for better tracing at the time of outage ---
+    board_port_description = models.CharField(max_length=100, blank=True, null=True, help_text="Snapshot of Board/Port at time of outage")
+    port_tx_power = models.FloatField(null=True, blank=True, help_text="Snapshot of Port Tx Power at time of outage")
+    port_rx_power = models.FloatField(null=True, blank=True, help_text="Snapshot of Port Rx Power at time of outage")
 
     def __str__(self):
         status = "Active" if self.end_time is None else f"Ended {self.end_time.strftime('%Y-%m-%d %H:%M')}"
@@ -385,6 +395,7 @@ class NetworkStatusData(models.Model):
     avg_rx_power = models.FloatField(null=True, blank=True)
     avg_tx_power = models.FloatField(null=True, blank=True)
     
+    
     class Meta:
         ordering = ['-timestamp']
         verbose_name = 'Network Status Data'
@@ -392,3 +403,24 @@ class NetworkStatusData(models.Model):
         
     def __str__(self):
         return f"Network Status at {self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+
+class UnconfiguredONT(models.Model):
+    serial_number = models.CharField(max_length=50)
+    vendor_id = models.CharField(max_length=50)
+    frame = models.IntegerField()
+    slot = models.IntegerField()
+    port = models.IntegerField()
+    discovered_at = models.DateTimeField(auto_now_add=True)
+    olt = models.ForeignKey('OLT', on_delete=models.CASCADE)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('discovered', 'Discovered'),
+            ('pending', 'Pending Authorization'),
+            ('authorized', 'Authorized'),
+        ],
+        default='discovered'
+    )
+
+    class Meta:
+        ordering = ['-discovered_at']

@@ -1,0 +1,21 @@
+[Unit]
+Description=OLT Manager ASGI Application
+After=network.target
+
+[Service]
+User=devserver
+Group=devserver
+WorkingDirectory=/home/devserver/Olt-app-django
+Environment="PATH=/home/devserver/Olt-app-django/venv/bin"
+Environment="PYTHONPATH=/home/devserver/Olt-app-django"
+ExecStart=/home/devserver/Olt-app-django/venv/bin/uvicorn oltmanager.asgi:application --host 0.0.0.0 --port 8000 --log-level info
+Restart=always
+StandardOutput=file:/home/devserver/Olt-app-django/logs/uvicorn.log
+StandardError=file:/home/devserver/Olt-app-django/logs/uvicorn-error.log
+
+
+[Service]
+LimitNOFILE=200000
+
+[Install]
+WantedBy=multi-user.target

@@ -33,7 +33,7 @@ import {
   SettingsEthernet as SettingsEthernetIcon,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
-import { triggerOLTMetricsRefresh } from '../services/api'; // We'll use this for refresh
+import { triggerOLTMetricsRefresh, triggerOLTCardsRefresh } from '../services/api'; // We'll use this for refresh
 
 function OLTDetails() {
   const { id } = useParams();
@@ -41,6 +41,7 @@ function OLTDetails() {
   // Use data and refresh function from OLTDashboard context
   const { oltData, loading: initialLoading, error: initialError, refreshOltData } = useOutletContext();
   const [isRefreshingMetrics, setIsRefreshingMetrics] = useState(false);
+  const [isRefreshingCards, setIsRefreshingCards] = useState(false);
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
 
   // Helper to format values, can be expanded
@@ -72,6 +73,29 @@ function OLTDetails() {
       setNotification({ open: true, message: `Failed to refresh metrics: ${err.response?.data?.message || err.message}`, severity: 'error' });
     } finally {
       setIsRefreshingMetrics(false);
+    }
+  };
+
+  const handleRefreshCards = async () => {
+    if (!id) return;
+    setIsRefreshingCards(true);
+    setNotification({ open: true, message: 'Card discovery initiated...', severity: 'info' });
+    try {
+      await triggerOLTCardsRefresh(id);
+      // Give the backend a moment to process the discovery task
+      await new Promise(resolve => setTimeout(resolve, 5000)); // 5-second delay
+
+      if (refreshOltData) {
+        await refreshOltData(); // Refresh the parent data to get new card count
+      }
+      setNotification({ open: true, message: 'Card discovery process completed. Data should be updated.', severity: 'success' });
+    } catch (err) {
+      console.error("Failed to trigger OLT card discovery:", err);
+      setNotification({
+        open: true, message: `Failed to initiate card discovery: ${err.response?.data?.message || err.message}`, severity: 'error'
+      });
+    } finally {
+      setIsRefreshingCards(false);
     }
   };
 
@@ -135,14 +159,24 @@ function OLTDetails() {
           {/* Removed back button as it's part of OLTDashboard layout */}
           <Typography variant="h5">OLT Overview</Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<RefreshIcon />}
-          onClick={handleRefreshMetrics}
-          disabled={isRefreshingMetrics || initialLoading}
-        >
-          {isRefreshingMetrics ? 'Refreshing...' : 'Refresh Metrics'}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            startIcon={<RefreshIcon />}
+            onClick={handleRefreshCards}
+            disabled={isRefreshingCards || initialLoading}
+          >
+            {isRefreshingCards ? 'Refreshing...' : 'Refresh Cards'}
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<RefreshIcon />}
+            onClick={handleRefreshMetrics}
+            disabled={isRefreshingMetrics || initialLoading}
+          >
+            {isRefreshingMetrics ? 'Refreshing...' : 'Refresh Metrics'}
+          </Button>
+        </Box>
       </Box>
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
         <Chip

@@ -39,11 +39,14 @@ function Layout({ children }) {
         <Toolbar>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }}>
-              Dotmac Network Management
+              ISP Network Management
             </Link>
           </Typography>
+          <Button color="inherit" component={Link} to="/dashboard">Dashboard</Button>
+          <Button color="inherit" component={Link} to="/olt-list">OLTS</Button>
+          <Button color="inherit" component={Link} to="/unconfigured-onts">Unconfigured</Button>
+          <Button color="inherit">Configured</Button>
           <Button color="inherit">User Training</Button>
-          <Button color="inherit">Configure</Button>
           <Button color="inherit">Scripts</Button>
           <Button color="inherit">Diagnostics</Button>
           <Button color="inherit">Reports</Button>
@@ -95,6 +98,9 @@ function Layout({ children }) {
               <MenuItem component={Link} to="/speed-profiles" onClick={handleSettingsClose}>
                 Speed Profiles
               </MenuItem>
+              <MenuItem component={Link} to="/unconfigured-onts" onClick={handleSettingsClose}>
+                Unconfigured ONTs
+              </MenuItem>
             </Menu>
           </Box>
           <Button color="inherit">Logout</Button>
@@ -107,7 +113,7 @@ function Layout({ children }) {
         </Button>
       </Box>
 
-      <Box sx={{ display: 'flex', borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
+      {/* <Box sx={{ display: 'flex', borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
         {navItems.map((item) => (
           <Button
             key={item.path}
@@ -124,7 +130,7 @@ function Layout({ children }) {
             {item.label}
           </Button>
         ))}
-      </Box>
+      </Box> */}
 
       <Box sx={{ flexGrow: 1, p: 3 }}>
         {children}

@@ -3,10 +3,10 @@ import { useParams, Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, CircularProgress, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Breadcrumbs, Link, Chip, Button, Snackbar, IconButton
+  Breadcrumbs, Link, Chip, Button, Snackbar, IconButton, Tooltip
 } from '@mui/material';
 import { Home as HomeIcon, Router as RouterIcon, SettingsInputSvideo as SlotIcon, Refresh as RefreshIcon, ArrowBack as ArrowBackIcon, Cable as CableIcon } from '@mui/icons-material';
-import { getOntsForPonPort, triggerOntsRefresh, getPonPortDetailsForSlot, getOLTDetails } from '../services/api'; // Assuming getPonPortDetailsForSlot gives individual PON port info if needed for breadcrumbs
+import { getOntsForPonPort, triggerOntsRefresh, triggerSingleOntRefresh, getPonPortDetailsForSlot, getOLTDetails } from '../services/api';
 
 function ONTList() {
   const { oltId, slotNumber, ponPortId } = useParams();
@@ -15,6 +15,7 @@ function ONTList() {
   const navigate = useNavigate();
   const [error, setError] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRefreshingOnt, setIsRefreshingOnt] = useState({});
   const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
   const [oltName, setOltName] = useState('');
   const [ponPortInfo, setPonPortInfo] = useState(null);
@@ -137,6 +138,31 @@ function ONTList() {
     }
   };
 
+  const handleSingleOntRefresh = async (ontId) => {
+    setIsRefreshingOnt(prev => ({ ...prev, [ontId]: true }));
+    showNotification(`Refreshing ONT ${ontId}...`, 'info');
+    try {
+      const response = await triggerSingleOntRefresh(ontId);
+      showNotification(response.message || `ONT ${ontId} refresh initiated.`, 'success');
+
+      // Wait a few seconds for the backend to update, then refetch all data for the port
+      setTimeout(() => {
+        fetchData();
+      }, 3000);
+
+    } catch (err) {
+      const errorMessage = err.detail || err.message || 'Failed to initiate ONT refresh.';
+      console.error(`ONTList: handleSingleOntRefresh - Error for ONT ${ontId}:`, errorMessage, err);
+      showNotification(`Error refreshing ONT ${ontId}: ${errorMessage}`, 'error');
+    } finally {
+      // Keep the spinner for a few seconds to indicate processing
+      setTimeout(() => {
+        setIsRefreshingOnt(prev => ({ ...prev, [ontId]: false }));
+      }, 3000);
+    }
+  };
+
+
   const getStatusChip = (status) => {
     if (status?.toLowerCase() === "online") {
       return <Chip label="Online" color="success" size="small" />;
@@ -216,6 +242,7 @@ function ONTList() {
                   <TableCell>Last Down Time</TableCell>
                   <TableCell>Last Down Cause</TableCell>
                   <TableCell>Last Update</TableCell>
+                  <TableCell>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -235,6 +262,20 @@ function ONTList() {
                     <TableCell>{formatDate(ont.last_down_time)}</TableCell>
                     <TableCell>{ont.last_down_cause || 'N/A'}</TableCell>
                     <TableCell>{formatDate(ont.last_snmp_update)}</TableCell>
+                    <TableCell>
+                      <Tooltip title="Refresh ONT">
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation(); // Prevent row click from navigating
+                            handleSingleOntRefresh(ont.id);
+                          }}
+                          disabled={isRefreshingOnt[ont.id] || isRefreshing}
+                        >
+                          {isRefreshingOnt[ont.id] ? <CircularProgress size={20} /> : <RefreshIcon fontSize="small" />}
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

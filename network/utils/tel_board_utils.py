@@ -4,12 +4,11 @@ import time
 import telnetlib3
 import sys
 from datetime import datetime
-import asyncio
 
 def log(message, error=False):
     timestamp = datetime.now().strftime('%H:%M:%S')
     prefix = '[ERROR]' if error else '[INFO] '
-    print(f"[{timestamp}]{prefix} {message}", file=sys.stderr if error else sys.stdout)
+    # print(f"[{timestamp}]{prefix} {message}", file=sys.stderr if error else sys.stdout)
 
 async def get_installed_board_info(host, username, password, frame='0'):
     reader = writer = None
@@ -92,7 +91,7 @@ async def get_installed_board_info(host, username, password, frame='0'):
         print(result)
         return result
     except Exception as e:
-        log(f"Error in get_ssh_metrics: {str(e)}", error=True)
+        log(f"Error in get_olt_metrics: {str(e)}", error=True)
         return None
     finally:
         if writer:

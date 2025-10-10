@@ -41,11 +41,11 @@ def ping_host(host_ip, packets=1, timeout_ms=1000):
             text=True,
             timeout=(packets * (timeout_ms / 1000)) + 5
         )
-        print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}', RC: {process.returncode}, STDOUT: '{process.stdout.strip()}', STDERR: '{process.stderr.strip()}'")
+        # print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}', RC: {process.returncode}, STDOUT: '{process.stdout.strip()}', STDERR: '{process.stderr.strip()}'")
         return process.returncode == 0
     except subprocess.TimeoutExpired:
-        print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}' - Subprocess TIMEOUT")
+        # print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}' - Subprocess TIMEOUT")
         return False
     except Exception as e:
-        print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}' - Exception: {e}")
+        # print(f"[PING_HOST_DEBUG] IP: {host_ip}, Command: '{command}' - Exception: {e}")
         return False

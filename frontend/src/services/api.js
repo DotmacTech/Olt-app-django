@@ -218,6 +218,22 @@ export const triggerOntsRefresh = async (ponPortId) => {
   }
 };
 
+/**
+ * Triggers a background task to refresh a single ONT's data.
+ * @param {number|string} ontId The ID of the ONT to refresh.
+ * @returns {Promise<any>} A promise that resolves with the API response.
+ */
+export const triggerSingleOntRefresh = async (ontId) => {
+  try {
+    // Note: The backend URL needs to be created. Assuming a URL like /api/onts/{id}/refresh/
+    const response = await api.post(`/onts/${ontId}/refresh/`);
+    return response.data;
+  } catch (error) {
+    console.error(`Error triggering refresh for ONT ${ontId}:`, error.response || error);
+    throw error.response?.data || error;
+  }
+};
+
 // Add this function to your api.js
 export const triggerOLTMetricsRefresh = async (oltId) => {
   const response = await api.post(`/olts/${oltId}/refresh-system-metrics/`);
@@ -523,11 +539,14 @@ export const deleteSpeedProfile = async (id) => {
 
 // --- Network Status API Calls ---
 
-export const getNetworkStatus = async () => {
+export const getNetworkStatus = async (timeFrame = '24h') => {
   try {
-    const response = await api.get('/network-status/');
+    // Ensure timeFrame is a valid string, default if not provided or invalid
+    const validTimeFrame = typeof timeFrame === 'string' && timeFrame.length > 0 ? timeFrame : '24h';
+    const response = await api.get(`/network-status/?time_frame=${encodeURIComponent(validTimeFrame)}`);
     return response.data;
   } catch (error) {
+    // Log the full error response if available
     console.error('Error fetching network status:', error);
     throw error;
   }
@@ -637,4 +656,35 @@ export const refreshPonPorts = async () => {
     
     throw new Error(error.message || 'Failed to refresh PON Ports. Please try again.');
   }
+};
+// This function should be added to /home/devserver/Olt-app-django/frontend/src/services/api.js
+
+/**
+ * Triggers a background task to discover/refresh hardware cards for a specific OLT.
+ * @param {string} oltId The ID of the OLT to refresh.
+ * @returns {Promise<object>} The response data from the API.
+ */
+export const triggerOLTCardsRefresh = async (oltId) => {
+  try {
+    // This assumes you have a configured 'api' instance (e.g., from axios)
+    const response = await api.post(`/olts/${oltId}/refresh-cards/`);
+    return response.data;
+  } catch (error) {
+    console.error(`Error triggering OLT cards refresh for OLT ID ${oltId}:`, error);
+    throw error;
+  }
+};
+
+// New API calls for unconfigured ONTs
+
+export const getUnconfiguredONTs = async () => {
+  const response = await axios.get(`${API_BASE_URL}unconfigured-onts/`);
+  return response.data;
+};
+
+export const authorizeONT = async (oltId, serialNumber) => {
+  const response = await axios.post(
+    `${API_BASE_URL}/olts/${oltId}/unconfigured-onts/${serialNumber}/authorize/`
+  );
+  return response.data;
 };

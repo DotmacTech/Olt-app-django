@@ -28,6 +28,7 @@ import EditOnuTypePage from './pages/EditOnuTypePage'; // Import the Edit ONU Ty
 import ZoneListPage from './pages/ZoneListPage';
 import ZoneForm from './components/ZoneForm';
 import SpeedProfileListPage from './pages/SpeedProfileListPage';
+import UnconfiguredONTs from './pages/UnconfiguredONTs';
 
 const theme = createTheme({
   palette: {
@@ -92,6 +93,7 @@ function App() {
             
             {/* Speed Profile Management */}
             <Route path="/speed-profiles" element={<SpeedProfileListPage />} />
+            <Route path="/unconfigured-onts" element={<UnconfiguredONTs />} />
           </Routes>
         </Layout>
       </Router>

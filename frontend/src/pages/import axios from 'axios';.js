@@ -602,3 +602,33 @@ export const refreshPonPorts = async () => {
     throw new Error(error.message || 'Failed to refresh PON Ports. Please try again.');
   }
 };
+
+// --- Network Status API Calls ---
+
+/**
+ * Fetches time-series network status data for charts.
+ * Expected to return data like: [{ timestamp: "2023-10-27T10:00:00Z", online_onts: 150, offline_onts: 5, ... }]
+ */
+export const getNetworkStatus = async () => {
+  try {
+    const response = await api.get('/network-status/'); // Ensure this endpoint exists on your backend
+    // The NetworkStatusChart component handles response.results or direct array
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching network status data:', error.response || error.message);
+    throw error;
+  }
+};
+
+/**
+ * Fetches summary network status.
+ */
+export const getNetworkStatusSummary = async () => {
+  try {
+    const response = await api.get('/network-status/summary/'); // Ensure this endpoint exists
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching network status summary:', error.response || error.message);
+    throw error;
+  }
+};

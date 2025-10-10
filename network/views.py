@@ -15,15 +15,22 @@ from rest_framework import viewsets, status, generics, mixins
 from rest_framework.decorators import action,api_view, permission_classes # For function-based views
 from rest_framework.response import Response
 
+from rest_framework.views import APIView
+from .models import UnconfiguredONT
+
+from network.utils.snmp_utils import get_system_metrics
+
+logger = logging.getLogger(__name__)
+
 
 from .models import (
     OLT, Card, PONPort, UplinkPort, VLAN,
-    ONUType, ONU, Zone, ODB, SpeedProfile, PONOutageEvent, NetworkStatus
+    ONUType, ONU, Zone, ODB, SpeedProfile, PONOutageEvent, NetworkStatusData, UnconfiguredONT
 )
 from .serializers import ( # Import the new serializers
     OLTListSerializer, OLTDetailSerializer, OLTCreateUpdateSerializer, PONPortSerializer,
     CardSerializer, PONPortSerializer, ONUSerializer, UplinkPortSerializer, VLANSerializer, ONUTypeSerializer, ONUSerializer,
-    ZoneSerializer, ODBSerializer, SpeedProfileSerializer, PONOutageEventSerializer, NetworkStatusSerializer
+    ZoneSerializer, ODBSerializer, SpeedProfileSerializer, PONOutageEventSerializer, NetworkStatusDataSerializer
 )
 from .utils.board_utils import get_installed_board_info # Assuming this is the correct pa
 # from .tasks import update_olt_metrics
@@ -55,39 +62,20 @@ class OLTViewSet(viewsets.ModelViewSet):
         # Default to list serializer for 'list' action or others
         return OLTListSerializer
 
-    @action(detail=True, methods=['get'])
-    def cards(self, request, pk=None):
-        """Return cards for this OLT; if none, fetch via SSH and create them."""
-        # Try to get cards from DB
-        cards_qs = Card.objects.filter(olt_id=pk)
-        if cards_qs.exists():
-            serializer = CardSerializer(cards_qs, many=True)
-            return Response(serializer.data)
-        # No cards: fetch via SSH and create
+    @action(detail=True, methods=['post'], url_path='refresh-cards')
+    def refresh_cards(self, request, pk=None):
+        """
+        Triggers a Celery task to discover/refresh cards for the OLT.
+        """
         olt = self.get_object()
+        logger.info(f"VIEW: Attempting to trigger card discovery for OLT ID {olt.id} ({olt.name}).")
         try:
-            # Use the already imported function
-            # from network.utils.board_utils import get_installed_board_info
-            board_info = get_installed_board_info(
-                olt.ip_address,
-                olt.telnet_username,
-                olt.telnet_password # Assuming password is required, add port if needed
-            )
-            boards = board_info.get('data', {}).get('boards', [])
-            created_cards = []
-            for board in boards:
-                card = Card.objects.create(
-                    olt=olt,
-                    slot_number=board.get('slot'),
-                    card_type=board.get('board_name'),
-                    port_count=board.get('port_count'),
-                    status=board.get('status')
-                )
-                created_cards.append(card)
-            serializer = CardSerializer(created_cards, many=True)
-            return Response(serializer.data)
-        except ImportError:
-            return Response({'error': 'SSH board info utility not found'}, status=500)
+            discover_and_create_cards_task.delay(olt.id)
+            logger.info(f"VIEW: Successfully called .delay() for discover_and_create_cards_task for OLT ID {olt.id}.")
+            return Response({"message": "Card discovery/refresh initiated."}, status=status.HTTP_202_ACCEPTED)
+        except Exception as e:
+            logger.error(f"VIEW: Error calling .delay() for discover_and_create_cards_task for OLT ID {olt.id}: {e}", exc_info=True)
+            return Response({"error": "Failed to initiate card discovery."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         
     @action(detail=True, methods=['get'], url_path='slot/(?P<slot_number_str>[^/.]+)/pon-port-details')
@@ -138,52 +126,16 @@ class OLTViewSet(viewsets.ModelViewSet):
             
             num_pon_ports_on_card = target_card.port_count
 
-            # Try to fetch from DB first
+            # This endpoint should always fetch from the database.
+            # The refresh action is separate and asynchronous.
             db_pon_ports = PONPort.objects.filter(card=target_card).order_by('port_index_on_card')
             
-            # Define staleness threshold (e.g., 15 minutes)
-            staleness_threshold = timezone.now() - timedelta(minutes=15)
-            
-            refresh_from_snmp = False # Default to refresh
-            # if db_pon_ports.exists() and db_pon_ports.count() == num_pon_ports_on_card:
-            #     # Check if all ports have a recent last_snmp_update
-            #     if all(port.last_snmp_update and port.last_snmp_update > staleness_threshold for port in db_pon_ports):
-            #         refresh_from_snmp = False
-            
-            if not refresh_from_snmp:
-                serializer = PONPortSerializer(db_pon_ports, many=True)
-                return Response(serializer.data)
-
-            # # Fetch from SNMP, then save/update DB
-            # pon_details_data_snmp = get_ont_info_per_port(
-            #     ip=olt.ip_address,
-            #     community=olt.snmp_ro_community,
-            #     slot_num=target_card.slot_number, # Use the slot_number of the found 16-port card
-            #     number_of_ports=num_pon_ports_on_card
-            # )
-            # updated_ports_in_db = []
-            # for port_data_snmp in pon_details_data_snmp:
-            #     pon_port_obj, created = PONPort.objects.update_or_create(
-            #         card=target_card,
-            #         port_index_on_card=port_data_snmp.get('port_id'), # Matches key from _fetch_one_port_details_async
-            #         defaults={
-            #             'description': port_data_snmp.get('port_desc'),
-            #             'status': str(port_data_snmp.get('port_status')), # Ensure it's a string
-            #             'configured_onts': port_data_snmp.get('number_of_olt', 0),
-            #             'online_onts': port_data_snmp.get('online', 0),
-            #             'tx_power': port_data_snmp.get('tx_power'),
-            #             'rx_power': port_data_snmp.get('rx_power'),
-            #             'last_snmp_update': timezone.now()
-            #         }
-            #     )
-            #     updated_ports_in_db.append(pon_port_obj)
-            
-            # serializer = PONPortSerializer(updated_ports_in_db, many=True)
-            # return Response(serializer.data)
+            serializer = PONPortSerializer(db_pon_ports, many=True)
+            return Response(serializer.data)
             
         except Exception as e:
-            print(f"Error in pon_port_details_for_slot view for OLT {olt.id}, Slot {slot_number}: {e}")
-            return Response({"error": f"Failed to retrieve PON port details via SNMP: {str(e)}"},
+            logger.error(f"Error in pon_port_details_for_slot view for OLT {olt.id}, Slot {slot_number}: {e}", exc_info=True)
+            return Response({"error": f"Failed to retrieve PON port details from database: {str(e)}"},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     @action(detail=True, methods=['post'], url_path='slot/(?P<slot_number_str>[^/.]+)/refresh-pon-details')
     def refresh_pon_port_details(self, request, pk=None, slot_number_str=None):
@@ -238,8 +190,15 @@ class OLTViewSet(viewsets.ModelViewSet):
         return Response({"message": "OLT reachability check initiated."}, status=status.HTTP_202_ACCEPTED)
 
 class CardViewSet(viewsets.ModelViewSet):
-    queryset = Card.objects.all()
     serializer_class = CardSerializer
+    
+    def get_queryset(self):
+        queryset = Card.objects.all()
+        # If accessed via nested route (/olts/<olt_pk>/cards/), filter by OLT
+        olt_pk = self.kwargs.get('olt_pk')
+        if olt_pk is not None:
+            queryset = queryset.filter(olt_id=olt_pk)
+        return queryset
 
 class PONPortViewSet(viewsets.ModelViewSet):
     queryset = PONPort.objects.all()
@@ -257,9 +216,7 @@ class ONUTypeViewSet(viewsets.ModelViewSet):
     queryset = ONUType.objects.all()
     serializer_class = ONUTypeSerializer
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
+
 
 class AllONTListAPIView(APIView):
     """
@@ -278,7 +235,7 @@ class ONUViewSet(mixins.ListModelMixin,
     Accessed via /api/pon-ports/{pon_port_pk}/onts/
     """
     serializer_class = ONUSerializer
-    # queryset = ONU.objects.all() # We'll override get_queryset
+    queryset = ONU.objects.all()
 
     def get_queryset(self):
         """
@@ -288,7 +245,7 @@ class ONUViewSet(mixins.ListModelMixin,
         pon_port_pk = self.kwargs.get('pon_port_pk')
         if pon_port_pk:
             return ONU.objects.filter(pon_port_id=pon_port_pk).select_related('onu_type', 'pon_port__card__olt').order_by('ont_index_on_port')
-        return ONU.objects.none() # Should not happen if routing is correct
+        return ONU.objects.all()
 
     @action(detail=False, methods=['post'], url_path='refresh-ont-details')
     def refresh_ont_details(self, request, pon_port_pk=None):
@@ -312,9 +269,30 @@ class ONUViewSet(mixins.ListModelMixin,
                 {"error": f"Failed to initiate ONT details refresh: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @action(detail=True, methods=['post'])
+    def refresh(self, request, pk=None):
+        """
+        Triggers a background task to refresh a single ONT.
+        """
+        try:
+            ont = self.get_object()
+            pon_port = ont.pon_port
+            # For now, we will trigger a refresh of the whole PON port,
+            # as there is no task to refresh a single ONT yet.
+            discover_and_update_onts_for_pon_port_task.delay(pon_port.id)
+            return Response(
+                {"message": f"ONT {ont.id} refresh initiated by refreshing the parent PON Port {pon_port.id}."},
+                status=status.HTTP_202_ACCEPTED
+            )
+        except ONU.DoesNotExist:
+            return Response({"error": "ONT not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to initiate ONT refresh: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 @api_view(['GET'])
-# Add permission_classes as needed, e.g., [IsAuthenticated] or [AllowAny] for now
-# @permission_classes([AllowAny]) 
 def get_olt_pon_port_context_info(request, olt_id, slot_number, pon_port_id):
     """
     Provides context information (OLT name, PON port index) 
@@ -357,65 +335,102 @@ class SpeedProfileViewSet(viewsets.ModelViewSet):
     serializer_class = SpeedProfileSerializer
 
 
-class NetworkStatusViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    API endpoint that allows network status to be viewed.
-    """
-    queryset = NetworkStatus.objects.filter(is_monitored=True)
-    serializer_class = NetworkStatusSerializer
-    filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['status', 'component_type']
+# class NetworkStatusViewSet(viewsets.ReadOnlyModelViewSet):
+#     """
+#     API endpoint that allows network status to be viewed.
+#     """
+#     queryset = NetworkStatus.objects.filter(is_monitored=True)
+#     serializer_class = NetworkStatusSerializer
+#     filter_backends = [DjangoFilterBackend]
+#     filterset_fields = ['status', 'component_type']
     
+#     @action(detail=False, methods=['get'])
+#     def summary(self, request):
+#         """
+#         Get a summary of network status.
+#         """
+#         from django.db.models import Count, Avg, F, Q
+        
+#         # Get basic counts
+#         total_components = self.get_queryset().count()
+#         up_components = self.get_queryset().filter(status='up').count()
+#         down_components = self.get_queryset().filter(status='down').count()
+#         degraded_components = self.get_queryset().filter(status='degraded').count()
+        
+#         # Calculate average metrics
+#         avg_metrics = self.get_queryset().aggregate(
+#             avg_uptime=Avg('uptime'),
+#             avg_response_time=Avg('response_time'),
+#             avg_cpu=Avg('cpu_usage'),
+#             avg_memory=Avg('memory_usage')
+#         )
+        
+#         # Get component types with counts
+#         component_types = (
+#             self.get_queryset()
+#             .values('component_type')
+#             .annotate(count=Count('id'), up=Count('id', filter=Q(status='up')))
+#             .order_by('-count')
+#         )
+        
+#         # Prepare response
+#         data = {
+#             'total_components': total_components,
+#             'up_components': up_components,
+#             'down_components': down_components,
+#             'degraded_components': degraded_components,
+#             'uptime_percentage': round(avg_metrics['avg_uptime'] or 0, 2),
+#             'avg_response_time': round(avg_metrics['avg_response_time'] or 0, 2) if avg_metrics['avg_response_time'] is not None else None,
+#             'avg_cpu_usage': round(avg_metrics['avg_cpu'] or 0, 2) if avg_metrics['avg_cpu'] is not None else None,
+#             'avg_memory_usage': round(avg_metrics['avg_memory'] or 0, 2) if avg_metrics['avg_memory'] is not None else None,
+#             'component_types': list(component_types),
+#             'last_updated': self.get_queryset().order_by('-last_checked').first().last_checked if self.get_queryset().exists() else None
+#         }
+        
+#         return Response(data)
+
+class NetworkStatusDataViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    API endpoint that allows historical network status data to be viewed.
+    """
+    queryset = NetworkStatusData.objects.all()
+    serializer_class = NetworkStatusDataSerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['status', 'timestamp']
+
     @action(detail=False, methods=['get'])
     def summary(self, request):
         """
-        Get a summary of network status.
+        Returns a summary of historical network status data, including average signal levels and ONT stats.
         """
-        from django.db.models import Count, Avg, F, Q
-        
-        # Get basic counts
-        total_components = self.get_queryset().count()
-        up_components = self.get_queryset().filter(status='up').count()
-        down_components = self.get_queryset().filter(status='down').count()
-        degraded_components = self.get_queryset().filter(status='degraded').count()
-        
-        # Calculate average metrics
-        avg_metrics = self.get_queryset().aggregate(
-            avg_uptime=Avg('uptime'),
-            avg_response_time=Avg('response_time'),
-            avg_cpu=Avg('cpu_usage'),
-            avg_memory=Avg('memory_usage')
-        )
-        
-        # Get component types with counts
-        component_types = (
-            self.get_queryset()
-            .values('component_type')
-            .annotate(count=Count('id'), up=Count('id', filter=Q(status='up')))
-            .order_by('-count')
-        )
-        
-        # Prepare response
-        data = {
-            'total_components': total_components,
-            'up_components': up_components,
-            'down_components': down_components,
-            'degraded_components': degraded_components,
-            'uptime_percentage': round(avg_metrics['avg_uptime'] or 0, 2),
-            'avg_response_time': round(avg_metrics['avg_response_time'] or 0, 2) if avg_metrics['avg_response_time'] is not None else None,
-            'avg_cpu_usage': round(avg_metrics['avg_cpu'] or 0, 2) if avg_metrics['avg_cpu'] is not None else None,
-            'avg_memory_usage': round(avg_metrics['avg_memory'] or 0, 2) if avg_metrics['avg_memory'] is not None else None,
-            'component_types': list(component_types),
-            'last_updated': self.get_queryset().order_by('-last_checked').first().last_checked if self.get_queryset().exists() else None
-        }
-        
-        return Response(data)
+        from django.db.models import Avg, Sum
 
-from network.utils.snmp_utils import get_system_metrics
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-import asyncio
+        qs = self.get_queryset()
+
+        summary_data = qs.aggregate(
+            total_onts=Avg('total_onts'),
+            online_onts=Avg('online_onts'),
+            offline_onts=Avg('offline_onts'),
+            signal_loss_onts=Avg('signal_loss_onts'),
+            power_failure_onts=Avg('power_failure_onts'),
+            avg_rx_power=Avg('avg_rx_power'),
+            avg_tx_power=Avg('avg_tx_power'),
+        )
+
+        return Response({
+            "summary": {
+                "total_onts_avg": summary_data.get("total_onts", 0),
+                "online_onts_avg": summary_data.get("online_onts", 0),
+                "offline_onts_avg": summary_data.get("offline_onts", 0),
+                "signal_loss_onts_avg": summary_data.get("signal_loss_onts", 0),
+                "power_failure_onts_avg": summary_data.get("power_failure_onts", 0),
+                "avg_rx_power": round(summary_data.get("avg_rx_power") or 0, 2),
+                "avg_tx_power": round(summary_data.get("avg_tx_power") or 0, 2),
+            }
+        })
+
+
+
 class SystemMetricsAPIView(APIView):
     def get(self, request):
         from network.models import OLT
@@ -492,9 +507,9 @@ def pon_outage_list_view(request):
     """
     API endpoint to list active and recent PON outage events.
     """
-    active_outages = PONOutageEvent.objects.filter(resolved_at__isnull=True)
+    active_outages = PONOutageEvent.objects.filter(end_time__isnull=True)
     recent_outages = PONOutageEvent.objects.filter(
-        resolved_at__isnull=False
+        end_time__isnull=False
     ).order_by('-created_at')[:10]  # Last 10 resolved outages
     
     active_serializer = PONOutageEventSerializer(active_outages, many=True)
@@ -506,7 +521,6 @@ def pon_outage_list_view(request):
     })
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def refresh_components(request):
     """
     API endpoint to force refresh different components.
@@ -679,5 +693,98 @@ def refresh_pon_ports(request):
         logger.error(f"Error starting PON port refresh: {str(e)}")
         return Response(
             {"status": "error", "message": f"Failed to start PON port refresh: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+def refresh_single_ont_in_pon_port(request, pon_port_pk, ont_id):
+    """
+    API endpoint to trigger a refresh of a specific ONT in a PONPort.
+    """
+    try:
+        ont = ONU.objects.get(pk=ont_id, pon_port_id=pon_port_pk)
+    except ONU.DoesNotExist:
+        return Response({"error": "ONT not found for the specified PON Port."}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        from .tasks import refresh_single_ont_in_pon_port_task
+        refresh_single_ont_in_pon_port_task.delay(pon_port_pk, ont_id)
+        return Response(
+            {"message": f"Refresh initiated for ONT {ont.id} in PON Port {ont.pon_port.id}."},
+            status=status.HTTP_202_ACCEPTED
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to initiate ONT refresh: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+@api_view(['POST'])
+def authorize_ont(request, olt_id, serial_number):
+    """
+    Authorize an unconfigured ONT and move it to the configured ONTs table
+    """
+    try:
+        unconfigured_ont = UnconfiguredONT.objects.get(
+            olt_id=olt_id,
+            serial_number=serial_number,
+            status='discovered'
+        )
+        
+        # Create new ONU entry
+        ONU.objects.create(
+            serial_number=unconfigured_ont.serial_number,
+            pon_port=PONPort.objects.get(
+                card__olt_id=olt_id,
+                card__slot_number=unconfigured_ont.slot,
+                port_index_on_card=unconfigured_ont.port
+            ),
+            status='offline'  # Initial status
+        )
+        
+        # Mark as authorized
+        unconfigured_ont.status = 'authorized'
+        unconfigured_ont.save()
+        
+        return Response({'status': 'success'})
+    except UnconfiguredONT.DoesNotExist:
+        return Response(
+            {'error': 'Unconfigured ONT not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+def unconfigured_ont_list(request):
+    """
+    API endpoint to list all unconfigured ONTs
+    """
+    try:
+        onts = UnconfiguredONT.objects.select_related('olt').filter(
+            status='discovered'
+        ).order_by('-discovered_at')
+        
+        data = [{
+            'id': ont.id,
+            'serial_number': ont.serial_number,
+            'vendor_id': ont.vendor_id,
+            'frame': ont.frame,
+            'slot': ont.slot,
+            'port': ont.port,
+            'discovered_at': ont.discovered_at,
+            'status': ont.status,
+            'olt_id': ont.olt.id,
+            'olt_name': ont.olt.name
+        } for ont in onts]
+        
+        return Response(data)
+    except Exception as e:
+        logger.error(f"Error fetching unconfigured ONTs: {e}", exc_info=True)
+        return Response(
+            {"error": "Failed to fetch unconfigured ONTs"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

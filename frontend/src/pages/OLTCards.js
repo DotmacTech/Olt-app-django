@@ -24,7 +24,8 @@ function OLTCards() { // Remove oltId from props
     getOLTCards(id) // Use the id from params for the API call
       .then((data) => {
         console.log('OLTCards: API response data:', data); // Log the received data
-        setCards(data);
+        // The API returns a paginated object; we need the 'results' array from it.
+        setCards(data.results);
         setLoading(false);
       })
       .catch((err) => {
@@ -72,6 +73,7 @@ function OLTCards() { // Remove oltId from props
                       {card.port_count > 0 && (
                         <IconButton
                           component={RouterLink}
+                          // Update this route to match your actual PONPorts.js route
                           to={`/olts/${id}/slot/${card.slot_number}/ponports`}
                           color="primary"
                           aria-label="view pon ports"

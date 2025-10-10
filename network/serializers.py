@@ -1,6 +1,6 @@
 from .models import (
     OLT, Card, PONPort, UplinkPort, VLAN,
-    ONUType, ONU, Zone, ODB, SpeedProfile, PONOutageEvent, NetworkStatus, NetworkStatusData
+    ONUType, ONU, Zone, ODB, SpeedProfile, PONOutageEvent, NetworkStatusData, UnconfiguredONT
 )
 from rest_framework import serializers
 
@@ -130,32 +130,68 @@ class SpeedProfileSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+# class PONOutageEventSerializer(serializers.ModelSerializer):
+#     pon_port_name = serializers.CharField(source='pon_port.__str__', read_only=True)
+#     olt_name = serializers.CharField(source='pon_port.card.olt.name', read_only=True)
+#     slot_port = serializers.CharField(source='pon_port.slot_port_display', read_only=True)
+
+#     class Meta:
+#         model = PONOutageEvent
+#         fields = ['id', 'pon_port', 'pon_port_name', 'olt_name', 'slot_port', 'start_time', 'end_time', 'affected_ont_count', 'possible_cause']
+
+
+
+class OLTForOutageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OLT
+        fields = ['id', 'name']
+
+class CardForOutageSerializer(serializers.ModelSerializer):
+    olt = OLTForOutageSerializer()
+    class Meta:
+        model = Card
+        fields = ['id', 'slot_number', 'olt']
+
+class PONPortForOutageSerializer(serializers.ModelSerializer):
+    card = CardForOutageSerializer()
+    class Meta:
+        model = PONPort
+        fields = ['id', 'port_index_on_card', 'card']
+
 class PONOutageEventSerializer(serializers.ModelSerializer):
-    pon_port_name = serializers.CharField(source='pon_port.__str__', read_only=True)
-    olt_name = serializers.CharField(source='pon_port.card.olt.name', read_only=True)
-    slot_port = serializers.CharField(source='pon_port.slot_port_display', read_only=True)
+    # Use the nested serializer to provide context about the PON port
+    pon_port = PONPortForOutageSerializer(read_only=True)
 
     class Meta:
         model = PONOutageEvent
-        fields = ['id', 'pon_port', 'pon_port_name', 'olt_name', 'slot_port', 'start_time', 'end_time', 'affected_ont_count', 'possible_cause']
-
-
-class NetworkStatusSerializer(serializers.ModelSerializer):
-    """
-    Serializer for NetworkStatus model.
-    """
-    status_display = serializers.CharField(source='get_status_display', read_only=True)
-    
-    class Meta:
-        model = NetworkStatus
         fields = [
-            'id', 'name', 'status', 'status_display', 'last_checked', 
-            'response_time', 'uptime', 'component_type', 'ip_address',
-            'location', 'notes', 'is_monitored', 'last_status_change',
-            'cpu_usage', 'memory_usage', 'disk_usage', 'bandwidth_usage',
-            'packet_loss'
+            'id',
+            'pon_port',
+            'start_time',
+            'end_time',
+            'affected_ont_count',
+            'possible_cause',
+            # --- Add the new traced fields ---
+            'board_port_description',
+            'port_tx_power',
+            'port_rx_power',
         ]
-        read_only_fields = ['last_checked', 'last_status_change']
+# class NetworkStatusSerializer(serializers.ModelSerializer):
+#     """
+#     Serializer for NetworkStatus model.
+#     """
+#     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    
+#     class Meta:
+#         model = NetworkStatus
+#         fields = [
+#             'id', 'name', 'status', 'status_display', 'last_checked', 
+#             'response_time', 'uptime', 'component_type', 'ip_address',
+#             'location', 'notes', 'is_monitored', 'last_status_change',
+#             'cpu_usage', 'memory_usage', 'disk_usage', 'bandwidth_usage',
+#             'packet_loss'
+#         ]
+#         read_only_fields = ['last_checked', 'last_status_change']
 
 class NetworkStatusDataSerializer(serializers.ModelSerializer):
     """
@@ -171,3 +207,14 @@ class NetworkStatusDataSerializer(serializers.ModelSerializer):
             'status', 'status_display', 'avg_rx_power', 'avg_tx_power'
         ]
         read_only_fields = ['timestamp']
+
+class UnconfiguredONTSerializer(serializers.ModelSerializer):
+    olt_name = serializers.CharField(source='olt.name', read_only=True)
+    
+    class Meta:
+        model = UnconfiguredONT
+        fields = [
+            'id', 'serial_number', 'vendor_id', 'frame', 'slot', 
+            'port', 'discovered_at', 'status', 'olt_id', 'olt_name'
+        ]
+        read_only_fields = ['discovered_at', 'olt_name']
