@@ -108,7 +108,7 @@ class ONUSerializer(serializers.ModelSerializer):
     class Meta:
         model = ONU
         fields = [
-            'id', 'pon_port', 'serial_number', 'ont_index_on_port', 'status',
+            'id','name','pon_port', 'serial_number', 'ont_index_on_port', 'status',
             'rx_power_at_ont', 'tx_power_at_ont', 'rx_power_at_olt',
             'onu_type', 'onu_type_name', 'last_down_time', 'last_down_cause',
             'last_snmp_update', 'created_at'

@@ -143,6 +143,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # React development server
     "http://127.0.0.1:3000",  # React development server alternative
     "http://10.120.120.38:3000",  # Your frontend IP if different
+    "http://160.119.126.248:3000",
 ]
 CORS_ALLOW_CREDENTIALS = True  # Allow cookies to be included in cross-site HTTP requests
 
@@ -153,45 +154,14 @@ CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Default Redis URL
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'  # If you're storing results in Redis
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'Africa/Lagos'  # e.g., 'UTC' or 'Africa/Lagos'
-CELERY_TASK_DEFAULT_QUEUE = 'default'
-CELERY_TASK_CREATE_MISSING_QUEUES = True
+CELERY_RESULT_SERIALIZER = 'json' 
+CELERY_TIMEZONE = 'Africa/Lagos'  # e.g., 'UTC' or 'Africa/Lagos' 
 CELERY_IMPORTS = ('network.tasks',)  # Explicitly import tasks module
 
 # Celery Beat Settings (if you want to store schedules in the database with django-celery-beat)
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 # In your Django settings.py
 CELERY_WORKER_CANCEL_LONG_RUNNING_TASKS_ON_CONNECTION_LOSS = True
-from celery.schedules import crontab # For more complex schedules, or use timedelta
-
-CELERY_BEAT_SCHEDULE = {
-    'periodically-update-all-onts-data-every-5-minutes': {
-        'task': 'network.tasks.periodically_update_all_onts_data',
-        'schedule': 600,  # 300 seconds = 5 minutes
-        'options': {'queue': 'receive_periodic'},  # Specify the queue
-    },
-    'periodically-check-all-olts-reachability-every-5-minutes': {
-        'task': 'network.tasks.periodically_check_all_olts_reachability',
-        'schedule': 300.0,  # 300 seconds = 5 minutes
-        'options': {'queue': 'receive_periodic'},  # Specify the queue
-    },
-    'periodically-update-all-olts-metrics-every-5-minutes': {
-        'task': 'network.tasks.periodically_update_all_olts_metrics',
-        'schedule': 1200,  # 300 seconds = 5 minutes
-        'options': {'queue': 'receive_periodic'},  # Specify the queue
-    },
-    'periodically-detect-pon-outages-every-5-minutes': {
-        'task': 'network.tasks.periodically_detect_pon_outages',
-        'schedule': 1200,  # 300 seconds = 5 minutes
-        'options': {'queue': 'receive_periodic'},  # Specify the queue
-    },
-    'record-aggregated-network-status-every-5-minutes': {
-        'task': 'network.tasks.record_aggregated_network_status',
-        'schedule': 300.0,  # 300 seconds = 5 minutes
-        'options': {'queue': 'receive_periodic'},  # Specify the queue
-    },
-}
 
 # Logging Configuration for Development
 LOGGING = {

@@ -424,3 +424,18 @@ class UnconfiguredONT(models.Model):
 
     class Meta:
         ordering = ['-discovered_at']
+
+class ONUSignalHistory(models.Model):
+    """
+    Stores historical signal strength data for each ONU to track degradation.
+    """
+    onu = models.ForeignKey(ONU, on_delete=models.CASCADE, related_name='signal_history')
+    timestamp = models.DateTimeField(default=timezone.now, db_index=True)
+    rx_power_at_olt = models.FloatField(help_text="OLT Receive Power from ONT (dBm)")
+    rx_power_at_ont = models.FloatField(help_text="ONT Receive Power from OLT (dBm)")
+
+    class Meta:
+        ordering = ['-timestamp']
+        verbose_name = 'ONU Signal History'
+        verbose_name_plural = 'ONU Signal Histories'
+        get_latest_by = 'timestamp'

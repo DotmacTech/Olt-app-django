@@ -215,14 +215,14 @@ function PONPort() {
                     <TableCell>N/A</TableCell>
                     <TableCell>N/A</TableCell>
                     <TableCell>{getStatusChip(port.status)}</TableCell>
-                    <TableCell>
+                    <TableCell align="center">
                       <Link
                         component={RouterLink}
                         to={`/olts/${oltId}/slot/${slotNumber}/ponport/${port.id}/onts`}
                         sx={{ cursor: 'pointer', textDecoration: port.online_onts > 0 ? 'underline' : 'none', color: port.online_onts > 0 ? 'primary.main' : 'text.secondary' }}
                         onClick={(e) => { if (port.online_onts === 0) e.preventDefault(); }} // Prevent navigation if 0
                       >
-                        Online: {port.online_onts}
+                        {`${port.online_onts} / ${port.configured_onts}`}
                       </Link>
                     </TableCell>
                     <TableCell>

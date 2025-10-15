@@ -1,5 +1,5 @@
-from celery import shared_task
 from django.utils import timezone
+from celery import shared_task, group
 import logging # Import the logging module
 import asyncio
 from django.db.models import Count, Q
@@ -16,99 +16,6 @@ from django.db import transaction
 from .utils.discover_onts import ONTDiscovery # Import the ONTDiscovery class
 
 logger = logging.getLogger(__name__)
-
-@shared_task(bind=True, time_limit=300, soft_time_limit=240)
-def update_all_onts_task(self):
-    """
-    Task to update ONT information for all PON ports across all OLTs.
-    This task will:
-    1. Get all active PON ports
-    2. For each port, fetch ONT details via SNMP
-    3. Update or create ONT records in the database
-    """
-    logger = logging.getLogger(__name__)
-    
-    try:
-        # Get all active PON ports
-        pon_ports = PONPort.objects.select_related('card__olt').all()
-        total_ports = pon_ports.count()
-        logger.info(f"Starting ONT update for {total_ports} PON ports")
-        
-        updated_count = 0
-        error_count = 0
-        
-        for port in pon_ports:
-            try:
-                # Log which port we're processing
-                # logger.info(f"Processing PON port {port.id} on OLT {port.card.olt.name} (Slot {port.card.slot_number}, Port {port.port_index_on_card})")
-                
-                # Use the async helper to get ONT info for this PON port
-                try:
-                    ont_info = asyncio.run(get_ont_info_per_slot_async(
-                        ip=port.card.olt.ip_address,
-                        community=port.card.olt.snmp_ro_community,
-                        slot_num=port.card.slot_number,
-                        number_of_ports=1,  # We're processing one port at a time
-                        snmp_port=port.card.olt.snmp_port or 161
-                    ))
-                except Exception as e:
-                    logger.error(f"Error getting ONT info for PON port {port.id}: {str(e)}", exc_info=True)
-                    error_count += 1
-                    continue
-                
-                if not ont_info or not isinstance(ont_info, list) or not ont_info:
-                    logger.warning(f"No valid ONT data received for PON port {port.id} on OLT {port.card.olt.name}")
-                    error_count += 1
-                    continue
-                
-                # Log successful fetch
-                logger.info(f"Successfully fetched ONT data for PON port {port.id}: {ont_info}")
-                
-                # Process each ONT
-                with transaction.atomic():
-                    for ont_data in ont_info['data']:
-                        try:
-                            # Create or update ONT
-                            ONU.objects.update_or_create(
-                                pon_port=port,
-                                ont_index_on_port=ont_data.get('ont_index'),
-                                defaults={
-                                    'serial_number': ont_data.get('serial_number'),
-                                    'status': ont_data.get('status', 'unknown'),
-                                    'rx_power_at_olt': ont_data.get('rx_power'),
-                                    'last_snmp_update': timezone.now(),
-                                    'name': ont_data.get('description', '')
-                                }
-                            )
-                            updated_count += 1
-                        except Exception as ont_error:
-                            logger.error(f"Error processing ONT {ont_data.get('serial_number')} on port {port.id}: {str(ont_error)}")
-                            error_count += 1
-                            continue
-                
-                # Update the port's last update time
-                port.last_snmp_update = timezone.now()
-                port.save(update_fields=['last_snmp_update'])
-                
-            except Exception as port_error:
-                logger.error(f"Error processing PON port {port.id} on OLT {port.card.olt.name}: {str(port_error)}")
-                error_count += 1
-                continue
-        
-        logger.info(f"ONT update completed. Updated: {updated_count}, Errors: {error_count}")
-        return {
-            'status': 'completed',
-            'updated_onts': updated_count,
-            'errors': error_count,
-            'total_ports': total_ports
-        }
-        
-    except Exception as e:
-        logger.error(f"Critical error in update_all_onts_task: {str(e)}", exc_info=True)
-        return {
-            'status': 'error',
-            'message': str(e)
-        }
 
 # Placeholder for WebSocket notification - we'll define this structure later
 from .consumers import send_pon_outage_notification # Assuming it will be in consumers.py
@@ -131,8 +38,8 @@ def discover_and_create_cards_task(olt_id):
         ))
 
         # Check for a successful result from the utility function
-        if board_info_result and board_info_result.get('status') == 'success':
-            boards_data = board_info_result.get('data', {}).get('boards', [])
+        if board_info_result and 'data' in board_info_result and 'boards' in board_info_result['data']:
+            boards_data = board_info_result['data']['boards']
             for board_data in boards_data:
                 card, created = Card.objects.update_or_create(
                     olt=olt,
@@ -151,10 +58,14 @@ def discover_and_create_cards_task(olt_id):
                 # If the card has ports and is likely a PON card, trigger PON port discovery
                 # Adjust condition based on how you identify PON cards (e.g., card_type name)
                 if card.port_count > 0: # Basic check
-                    discover_and_create_pon_ports_task.apply_async(args=[card.id,], queue='receive_periodic')
+                    discover_and_create_pon_ports_task.apply_async(args=[card.id,])
             logger.info(f"TASK_discover_and_create_cards: Card discovery completed for OLT: {olt.name}")
         else:
-            error_message = board_info_result.get('error', 'Unknown error during card discovery')
+            # Improved error logging for card discovery failure
+            if board_info_result:
+                error_message = board_info_result.get('error', 'Unknown error during card discovery')
+            else:
+                error_message = "The board discovery utility (get_installed_board_info) returned a null or empty result."
             logger.error(f"TASK_discover_and_create_cards: Card discovery failed for OLT {olt.name}: {error_message}")
             # Optionally, update OLT status or log this error more formally
 
@@ -312,10 +223,18 @@ def update_olt_system_metrics_task(olt_id):
         )
 
         if metrics and metrics.get('status') == 'success':
-            olt.uptime = metrics.get('uptime', olt.uptime)
-            olt.cpu_usage = metrics.get('cpu', olt.cpu_usage)
-            olt.memory_usage = metrics.get('memory', olt.memory_usage) # 'memory' from metrics is usage %
-            olt.temperature = metrics.get('temperature', olt.temperature) # 'temperature' from metrics
+            # Only update fields if the metric was successfully retrieved and is not None
+            new_uptime = metrics.get('uptime')
+            if new_uptime is not None:
+                olt.uptime = new_uptime
+            
+            new_cpu = metrics.get('cpu')
+            if new_cpu is not None:
+                olt.cpu_usage = new_cpu
+
+            # The same pattern can be applied to other metrics if they can also return None
+            olt.memory_usage = metrics.get('memory', olt.memory_usage)
+            olt.temperature = metrics.get('temperature', olt.temperature)
             olt.metrics_status = 'success'
             olt.metrics_error = None
         elif metrics:
@@ -397,7 +316,7 @@ def periodically_update_all_onts_data():
     
     for pon_port in active_pon_ports:
         logger.info(f"TASK_periodically_update_all_onts: Queueing ONT data update for PON Port ID: {pon_port.id} (OLT: {pon_port.card.olt.name}, Card: {pon_port.card.slot_number}, Port: {pon_port.port_index_on_card}) with delay {base_delay}s.")
-        discover_and_update_onts_for_pon_port_task.apply_async(queue='receive_periodic', args=[pon_port.id], countdown=base_delay)
+        discover_and_update_onts_for_pon_port_task.apply_async(args=[pon_port.id], countdown=base_delay)
         base_delay += increment_delay_by
         
     logger.info(f"TASK_periodically_update_all_onts: Finished queueing ONT data updates for {active_pon_ports.count()} PON Ports.")
@@ -430,15 +349,13 @@ def update_all_olts_task():
             if is_reachable:
                 # Queue metrics update
                 update_olt_system_metrics_task.apply_async(
-                    args=[olt.id],
-                    queue='receive_periodic',
+                    args=[olt.id], 
                     countdown=5  # Small delay to prevent overloading
                 )
                 
                 # Queue card discovery
                 discover_and_create_cards_task.apply_async(
-                    args=[olt.id],
-                    queue='receive_periodic',
+                    args=[olt.id], 
                     countdown=10  # Slightly longer delay
                 )
                 
@@ -486,8 +403,7 @@ def update_all_pon_ports_task():
         try:
             # Queue PON port discovery for each OLT
             discover_and_create_pon_ports_task.apply_async(
-                args=[olt.id],
-                queue='receive_periodic',
+                args=[olt.id], 
                 countdown=5 * queued_olts  # Stagger the tasks
             )
             
@@ -528,7 +444,7 @@ def periodically_check_all_olts_reachability():
     
     for olt in olts:
         logger.info(f"TASK_periodically_check_all_olts_reachability: Queueing check for OLT: {olt.name} (ID: {olt.id}) with delay {base_delay}s.")
-        check_olt_reachability_task.apply_async(queue='receive_periodic', args=[olt.id], countdown=base_delay)
+        check_olt_reachability_task.apply_async(args=[olt.id], countdown=base_delay)
         base_delay += increment_delay_by
         
     logger.info(f"TASK_periodically_check_all_olts_reachability: Finished queueing checks for {olts.count()} OLTs.")
@@ -536,27 +452,26 @@ def periodically_check_all_olts_reachability():
 @shared_task
 def periodically_update_all_olts_metrics():
     """
-    Celery task to be run periodically by Celery Beat.
-    It iterates through all OLTs and queues a system metrics update task for each.
-    Only queues for OLTs that are considered 'active' or if you want to try updating
-    metrics regardless of their last known ping status.
+    Celery task to be run periodically by Celery Beat. It uses a group
+    to queue system metrics update tasks for all active OLTs in parallel.
     """
     logger.info(f"TASK_periodically_update_all_olts_metrics: Starting periodic update...")
-    
-    base_delay = 0  # Start with no delay for the first task
-    # Adjust this based on how many OLTs you have and typical task duration
-    increment_delay_by = 20 # Stagger subsequent tasks by 10 seconds each (metrics tasks can be longer)
 
-    # Consider which OLTs to update. For example, only active ones,
-    # or all OLTs to attempt metrics fetching even if they were recently inactive.
-    olts_to_update = OLT.objects.filter(status='active') # Or OLT.objects.all()
+    # Get a list of IDs for all active OLTs
+    olt_ids = list(OLT.objects.filter(status='active').values_list('id', flat=True))
 
-    for olt in olts_to_update:
-        logger.info(f"TASK_periodically_update_all_olts_metrics: Queueing metrics update for OLT: {olt.name} (ID: {olt.id}) with delay {base_delay}s.")
-        update_olt_system_metrics_task.apply_async(queue='receive_periodic', args=[olt.id], countdown=base_delay)
-        base_delay += increment_delay_by
-        
-    logger.info(f"TASK_periodically_update_all_olts_metrics: Finished queueing metrics updates for {olts_to_update.count()} OLTs.")
+    if not olt_ids:
+        logger.info("TASK_periodically_update_all_olts_metrics: No active OLTs found to update.")
+        return
+
+    # Create a group of task signatures, one for each OLT
+    # The .s(olt_id) creates a signature for the task with the OLT ID as an argument.
+    job = group(update_olt_system_metrics_task.s(olt_id) for olt_id in olt_ids)
+
+    # Execute the group of tasks in parallel
+    job.apply_async()
+
+    logger.info(f"TASK_periodically_update_all_olts_metrics: Queued a group of {len(olt_ids)} metrics update tasks.")
 
 @shared_task # Make sure this is a Celery task if it's to be scheduled by Celery Beat
 def periodically_detect_pon_outages():
@@ -943,10 +858,10 @@ def discover_unconfigured_onts_task(olt_id):
                 olt=olt,
                 defaults={
                     'vendor_id': ont['vendor_id'],
-                    'frame': ont['position']['frame'],
-                    'slot': ont['position']['slot'],
-                    'port': ont['position']['port'],
-                    'status': 'discovered'
+                    'frame': ont['frame'],
+                    'slot': ont['slot'],
+                    'port': ont['port'],
+                    'status': ont['status'],
                 }
             )
         

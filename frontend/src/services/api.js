@@ -678,7 +678,7 @@ export const triggerOLTCardsRefresh = async (oltId) => {
 // New API calls for unconfigured ONTs
 
 export const getUnconfiguredONTs = async () => {
-  const response = await axios.get(`${API_BASE_URL}unconfigured-onts/`);
+  const response = await axios.get(`${API_BASE_URL}/unconfigured-onts/`);
   return response.data;
 };
 

@@ -146,3 +146,4 @@ if __name__ == "__main__":
     results = asyncio.run(discover_onts_on_olt(host, username, password))
     for ont in results:
         print(f"Found ONT: {ont}")
+        

@@ -40,8 +40,7 @@ from .tasks import (
     discover_and_create_pon_ports_task, 
     discover_and_update_onts_for_pon_port_task, 
     update_olt_system_metrics_task,
-    check_olt_reachability_task,
-    update_all_onts_task,
+    check_olt_reachability_task,    
     periodically_check_all_olts_reachability,
     periodically_update_all_onts_data
 )
@@ -558,9 +557,8 @@ def refresh_components(request):
 @api_view(['GET', 'POST'])
 def refresh_onts(request):
     """
-    API endpoint to trigger a refresh of all ONTs across all PON ports.
+    API endpoint to trigger a staggered refresh of all ONTs across all active PON ports.
     """
-    from .tasks import update_all_onts_task
     from celery import current_app
     
     logger = logging.getLogger(__name__)
@@ -573,15 +571,15 @@ def refresh_onts(request):
         # Check if there's already a running update_all_onts_task
         for worker, tasks in active_tasks.items():
             for task in tasks:
-                if task['name'] == 'network.tasks.update_all_onts_task':
+                if task['name'] == 'network.tasks.periodically_update_all_onts_data':
                     return Response({
                         "status": "pending",
                         "message": "ONT refresh is already in progress",
                         "task_id": task['id']
                     }, status=status.HTTP_200_OK)
         
-        # Trigger the Celery task
-        task = update_all_onts_task.delay()
+        # Trigger the fan-out Celery task
+        task = periodically_update_all_onts_data.delay()
         
         logger.info(f"Started ONT refresh task with ID: {task.id}")
         
